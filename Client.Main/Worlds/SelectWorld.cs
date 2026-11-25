@@ -33,6 +33,8 @@ namespace Client.Main.Worlds
 
         public SelectWorld() : base(worldIndex: 94)
         {
+            // The login theme keeps playing through character select (same path: no restart).
+            BackgroundMusicPath = "Music/login_theme.mp3";
             EnableShadows = false;
             Terrain.PreferIndexBatching = true;
             Glow.Threshold = 0.55f;

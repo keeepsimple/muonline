@@ -9,6 +9,8 @@ namespace Client.Main.Objects.Monsters
     [NpcInfo(355, "Kentauros")]
     public class Kentauros : SoundMonsterObject
     {
+        protected virtual string ModelPath => "Monster/Monster112.bmd";
+
         protected override string AttackSoundPath => "Sound/w37/kenta_attack-01.wav";
         protected override string DeathSoundPath => "Sound/w37/kenta_death.wav";
 
@@ -25,7 +27,7 @@ namespace Client.Main.Objects.Monsters
 
         public override async Task Load()
         {
-            Model = await BMDLoader.Instance.Prepare($"Monster/Monster112.bmd");
+            Model = await BMDLoader.Instance.Prepare(ModelPath);
             await base.Load();
         }
 

@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Client.Data.ATT;
+using Client.Main.Controllers;
 using Client.Main.Controls;
 using Client.Main.Controls.UI;
 using Client.Main.Controls.UI.Game;
@@ -135,7 +136,12 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 uint zen = BinaryPrimitives.ReadUInt32LittleEndian(span[25..]);
                 // Blood Castle and Chaos Castle (OpenMU IBloodCastleScoreTableViewPlugin) use this layout.
                 _logger.LogInformation("Event score (0x93): success {Success}, score {Score}, exp {Exp}, zen {Zen}.", success, score, exp, zen);
-                MuGame.ScheduleOnMainThread(() => BloodCastleResultControl.Instance?.ShowResult(success, exp, (int)zen, (int)score));
+                MuGame.ScheduleOnMainThread(() =>
+                {
+                    BloodCastleResultControl.Instance?.ShowResult(success, exp, (int)zen, (int)score);
+                    // One-shot result track; the castle maps have no map music, the warp out restores the next map's.
+                    SoundController.Instance.PlayBackgroundMusic(success ? "Music/victory.mp3" : "Music/lose.mp3", loop: false);
+                });
                 return Task.CompletedTask;
             }
 
@@ -156,7 +162,12 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             _logger.LogInformation("Mini game score table (0x93): rank {Rank}, {Count} entries.", rank, entries.Count);
             ushort map = _characterState.MapId;
             string title = map is >= 18 and <= 23 or 53 ? "CHAOS CASTLE" : map is 9 or 32 ? "DEVIL SQUARE" : "EVENT RESULT";
-            MuGame.ScheduleOnMainThread(() => (MuGame.Instance?.ActiveScene as GameScene)?.MiniGameScore?.ShowResults(title, rank, entries));
+            MuGame.ScheduleOnMainThread(() =>
+            {
+                (MuGame.Instance?.ActiveScene as GameScene)?.MiniGameScore?.ShowResults(title, rank, entries);
+                if (map is 9 or 32 && _characterState.MapId == map)
+                    SoundController.Instance.PlayBackgroundMusic("Music/devil_square_outro.mp3", loop: false);
+            });
             return Task.CompletedTask;
         }
 

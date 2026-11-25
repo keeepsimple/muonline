@@ -291,6 +291,7 @@ namespace Client.Main.Scenes
             Controls.Add(Client.Main.Controls.UI.Game.CastleSiege.CastleSiegeSeniorWindow.Instance);
             Controls.Add(Client.Main.Controls.UI.Game.CastleSiege.CastleSiegeMachineWindow.Instance);
             Controls.Add(InstancedEventHud.Instance);
+            Controls.Add(IllusionTempleSkillBar.Instance);
             Controls.Add(InstancedEventResultWindow.Instance);
             PlayerShop = new PlayerShopControl();
             PlayerShop.ShopClosed += (ownerId, ownerName) =>

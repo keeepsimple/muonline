@@ -862,6 +862,25 @@ Check(!CrywolfEventState.Active && CrywolfEventState.Heroes.Count == 0, "BD/00 E
     Check(itHud.RelicHolder == "--", "BF/01 without carrier clears the relic holder");
     await Route(C1(0xBF, 0x06, 4));
     Check(itHud.SkillPoints == 4, "BF/06 updates the skill points");
+    Check(IllusionTempleSkillBar.Cost(210) == 5 && IllusionTempleSkillBar.Cost(211) == 5 && IllusionTempleSkillBar.Cost(212) == 10 && IllusionTempleSkillBar.Cost(213) == 5
+          && !IllusionTempleSkillBar.CanAfford(210, itHud.SkillPoints) && IllusionTempleSkillBar.CanAfford(213, 5)
+          && !IllusionTempleSkillBar.CanAfford(212, 9) && IllusionTempleSkillBar.CanAfford(212, 10)
+          && IllusionTempleSkillBar.NeedsTarget(211) && IllusionTempleSkillBar.NeedsTarget(213)
+          && !IllusionTempleSkillBar.NeedsTarget(210) && !IllusionTempleSkillBar.NeedsTarget(212),
+          "Illusion Temple skill costs, kill point availability and target rules");
+    Check(IllusionTempleSkillBar.IsShown(itHud.Mode, state.MapId) && IllusionTempleSkillBar.IsShown(InstancedEventMode.IllusionTemple, 98)
+          && !IllusionTempleSkillBar.IsShown(itHud.Mode, 0) && !IllusionTempleSkillBar.IsShown(InstancedEventMode.None, 45)
+          && !IllusionTempleSkillBar.IsShown(InstancedEventMode.Doppelganger, 45),
+          "Illusion Temple skill bar shows only in a temple during the event");
+    {
+        var none = new Microsoft.Xna.Framework.Input.KeyboardState();
+        var shift2 = new Microsoft.Xna.Framework.Input.KeyboardState(Microsoft.Xna.Framework.Input.Keys.LeftShift, Microsoft.Xna.Framework.Input.Keys.D2);
+        var plain2 = new Microsoft.Xna.Framework.Input.KeyboardState(Microsoft.Xna.Framework.Input.Keys.D2);
+        var shift5 = new Microsoft.Xna.Framework.Input.KeyboardState(Microsoft.Xna.Framework.Input.Keys.LeftShift, Microsoft.Xna.Framework.Input.Keys.D5);
+        Check(IllusionTempleSkillBar.HotkeySkill(shift2, none) == 211 && IllusionTempleSkillBar.HotkeySkill(plain2, none) == 0
+              && IllusionTempleSkillBar.HotkeySkill(shift2, shift2) == 0 && IllusionTempleSkillBar.HotkeySkill(shift5, none) == 0,
+              "Shift+1-4 picks the Illusion Temple skill, plain number keys stay skill slots");
+    }
     await Route(C1(0xBF, 0x01, 1, 2)); // truncated
     Check(itHud.Visible, "truncated BF/01 is ignored");
 
@@ -880,6 +899,7 @@ Check(!CrywolfEventState.Active && CrywolfEventState.Heroes.Count == 0, "BD/00 E
     await Route(C1(0xBF, 0x09, 0, 1));
     await Route(C1(0xBF, 0x09, 0, 3));
     Check(itHud.Mode == InstancedEventMode.None, "BF/09 Ended closes the Illusion Temple HUD");
+    Check(!IllusionTempleSkillBar.IsShown(itHud.Mode, state.MapId), "Illusion Temple skill bar hides when the event ends");
 
     var dgHud = InstancedEventHud.Instance;
     await Route(C1(0xBF, 0x10, 2));
@@ -1031,6 +1051,11 @@ Check(!CrywolfEventState.Active && CrywolfEventState.Heroes.Count == 0, "BD/00 E
           "DoppelgangerEnterRequest bytes");
     Check(Written(8, d => CharacterService.WriteIllusionTempleEnterRequest(d, 3, 0xFF)).SequenceEqual(new byte[] { 0xC1, 6, 0xBF, 0x00, 3, 0xFF }),
           "IllusionTempleEnterRequest bytes");
+    Check(Written(12, d => CharacterService.WriteIllusionTempleSkillRequest(d, 210, 0x0042, 0)).SequenceEqual(new byte[] { 0xC1, 9, 0xBF, 0x02, 0x00, 0xD2, 0x00, 0x42, 0 })
+          && Written(12, d => CharacterService.WriteIllusionTempleSkillRequest(d, 211, 0x1234, 3)).SequenceEqual(new byte[] { 0xC1, 9, 0xBF, 0x02, 0x00, 0xD3, 0x12, 0x34, 3 })
+          && Written(12, d => CharacterService.WriteIllusionTempleSkillRequest(d, 212, 0x0042, 0)).SequenceEqual(new byte[] { 0xC1, 9, 0xBF, 0x02, 0x00, 0xD4, 0x00, 0x42, 0 })
+          && Written(12, d => CharacterService.WriteIllusionTempleSkillRequest(d, 213, 0x0150, 6)).SequenceEqual(new byte[] { 0xC1, 9, 0xBF, 0x02, 0x00, 0xD5, 0x01, 0x50, 6 }),
+          "IllusionTempleSkillRequest bytes (210-213, big endian skill and target)");
     Check(Written(8, d => CharacterService.WriteLuckyCoinCountRequest(d)).SequenceEqual(new byte[] { 0xC1, 4, 0xBF, 0x0B })
           && Written(8, d => CharacterService.WriteLuckyCoinRegistrationRequest(d)).SequenceEqual(new byte[] { 0xC1, 4, 0xBF, 0x0C }),
           "LuckyCoinCount/RegistrationRequest bytes");

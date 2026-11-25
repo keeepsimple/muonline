@@ -10,6 +10,8 @@ namespace Client.Main.Objects.Monsters
     [NpcInfo(307, "Forest Orc")]
     public class ForestOrc : SoundMonsterObject
     {
+        protected virtual string ModelPath => "Monster/Monster104.bmd";
+
         protected override string DeathSoundPath => "Sound/w34/fo_death.wav";
 
         protected override string GetMoveSoundPath() =>
@@ -24,7 +26,7 @@ namespace Client.Main.Objects.Monsters
 
         public override async Task Load()
         {
-            Model = await BMDLoader.Instance.Prepare($"Monster/Monster104.bmd");
+            Model = await BMDLoader.Instance.Prepare(ModelPath);
             await base.Load();
         }
     }

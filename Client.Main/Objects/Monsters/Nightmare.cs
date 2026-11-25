@@ -9,6 +9,8 @@ namespace Client.Main.Objects.Monsters
     [NpcInfo(361, "Nightmare")]
     public class Nightmare : SoundMonsterObject
     {
+        internal const ushort DecaySkill = 38;
+        internal const ushort SpecialAttackSkill = 14; // KanturuNightmareDefinition.SpecialAttackSkillNumber (Inferno)
         protected override bool VaryBasicAttack => World?.MapId != 39;
         protected override string AttackSoundPath => "Sound/w39/nightmare_attack-01.wav";
         protected override string DeathSoundPath => "Sound/w39/nightmare_death.wav";
@@ -56,6 +58,14 @@ namespace Client.Main.Objects.Monsters
         {
             if (World == null)
                 return;
+
+            // OpenMU's Kanturu Nightmare attacks with Decay (0x18 + paired 0x19): poison fire falls on the target.
+            if (progress.SkillStarted && progress.SkillId == DecaySkill && TryGetAttackTargetPosition(out Vector3 target))
+            {
+                var decay = new DecayEffect(this, target);
+                World.Objects.Add(decay);
+                _ = decay.Load();
+            }
 
             if (progress.Action == MonsterActionType.Attack3)
             {

@@ -6,6 +6,8 @@ namespace Client.Main.Objects.Monsters
     [NpcInfo(305, "Blue Golem")]
     public class BlueGolem : SoundMonsterObject
     {
+        protected virtual string ModelPath => "Monster/Monster102.bmd";
+
         protected override string DeathSoundPath => "Sound/w34/bg_death.wav";
 
         protected override string GetMoveSoundPath() =>
@@ -22,7 +24,7 @@ namespace Client.Main.Objects.Monsters
 
         public override async Task Load()
         {
-            Model = await BMDLoader.Instance.Prepare($"Monster/Monster102.bmd");
+            Model = await BMDLoader.Instance.Prepare(ModelPath);
             await base.Load();
         }
     }

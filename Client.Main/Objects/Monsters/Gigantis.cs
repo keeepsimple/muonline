@@ -10,6 +10,8 @@ namespace Client.Main.Objects.Monsters
     [NpcInfo(356, "Gigantis")]
     public class Gigantis : SoundMonsterObject
     {
+        protected virtual string ModelPath => "Monster/Monster113.bmd";
+
         protected override string MoveSoundPath => "Sound/w37/gigan_idle-01.wav";
         protected override string AttackSoundPath => "Sound/w37/gigan_attack-01.wav";
         protected override string DeathSoundPath => "Sound/w37/gigan_death.wav";
@@ -24,7 +26,7 @@ namespace Client.Main.Objects.Monsters
 
         public override async Task Load()
         {
-            Model = await BMDLoader.Instance.Prepare($"Monster/Monster113.bmd");
+            Model = await BMDLoader.Instance.Prepare(ModelPath);
             await base.Load();
         }
     }

@@ -2634,6 +2634,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
         {
             (Balgass, 12) => MonsterActionType.Attack1,
             (Balgass, 13) => MonsterActionType.Attack2,
+            (DarkElf, 8) or (Balram, 9) => MonsterActionType.Attack2, // CrywolfEventDefinition.MonsterSkills
             _ => null,
         };
 

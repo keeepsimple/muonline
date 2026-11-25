@@ -7,8 +7,11 @@ using System.Threading.Tasks;
 
 namespace Client.Main.Objects.Monsters
 {
+    [NpcInfo(435, "Berserk")]
     public class Berserk : SoundMonsterObject
     {
+        protected virtual string ModelPath => "Monster/Monster107.bmd";
+
         protected override string AttackSoundPath => "Sound/w37/ber_attack-01.wav";
         protected override string DeathSoundPath => "Sound/w37/ber_death.wav";
 
@@ -24,7 +27,7 @@ namespace Client.Main.Objects.Monsters
 
         public override async Task Load()
         {
-            Model = await BMDLoader.Instance.Prepare($"Monster/Monster107.bmd");
+            Model = await BMDLoader.Instance.Prepare(ModelPath);
             await base.Load();
         }
     }

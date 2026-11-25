@@ -22,9 +22,10 @@ namespace Client.Main.Core.Utilities
             { 1, "Music/Dungeon.mp3" },              // Dungeon
             { 2, "Music/Devias.mp3" },               // Devias
             { 3, "Music/Noria.mp3" },                // Noria
-            { 4, "Music/lost_tower_a.mp3" },         // Lost Tower
+            { 4, "Music/lost_tower_a.mp3" },         // Lost Tower (floors 1-3; LostTowerWorld switches to _b on 4-7)
             { 7, "Music/atlans.mp3" },               // Atlans
             { 8, "Music/tarkan.mp3" },               // Tarkan
+            { 9, "Music/devil_square_intro.mp3" },   // Devil Square 1-4 (outro plays on the score table)
             { 10, "Music/icarus.mp3" },              // Icarus
             { 24, "Music/kalima.mp3" },              // Kalima 1-6, 7
             { 25, "Music/kalima.mp3" },
@@ -35,6 +36,7 @@ namespace Client.Main.Core.Utilities
             { 36, "Music/kalima.mp3" },
             { 30, "Music/castle.mp3" },              // Valley of Loren (castle, peace time)
             { 31, "Music/huntingground.mp3" },       // Land of Trials
+            { 32, "Music/devil_square_intro.mp3" },  // Devil Square 5-7
             { 33, "Music/Aida.mp3" },                // Aida
             { 34, "Music/crywolf1st.mp3" },          // Crywolf (peace time)
             { 37, "Music/kanturu_1st.mp3" },         // Kanturu Ruins

@@ -10,6 +10,7 @@ using Client.Main.Controls.UI.Game;
 using Client.Main.Core.Client;
 using Client.Main.Core.Utilities;
 using Client.Main.Models;
+using Client.Main.Objects;
 using Client.Main.Objects.Effects;
 using Client.Main.Objects.Monsters;
 using Client.Main.Scenes;
@@ -119,17 +120,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             {
                 try
                 {
-                    // ponytail: only the Maya body attack animation; the storm / stone rain particles are not ported.
-                    int animated = 0;
-                    if (MuGame.Instance?.ActiveScene?.World is WorldControl world)
-                    {
-                        double now = MuGame.Instance.GameTime?.TotalGameTime.TotalSeconds ?? 0;
-                        var action = storm ? MonsterActionType.Attack1 : MonsterActionType.Attack2;
-                        foreach (var maya in world.Objects.OfType<Maya>().ToList())
-                            if (maya.ApplyMonsterSkill(action, 0, 0, now, null)) animated++;
-                    }
-
-                    if (animated == 0)
+                    if (ShowMayaWideAreaAttack(MuGame.Instance?.ActiveScene?.World, storm) == null)
                         ShowSystemMessage(storm ? "Maya unleashes a storm!" : "Maya calls down a rain of stones!");
                 }
                 catch (Exception ex)
@@ -138,6 +129,29 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 }
             });
             return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Plays the Maya body attack animation and spawns the storm or stone rain on the local hero: the server
+        /// sends no position because the attack hits every player of the map.
+        /// </summary>
+        internal static WorldObject ShowMayaWideAreaAttack(WorldControl world, bool storm)
+        {
+            if (world == null)
+                return null;
+
+            double now = MuGame.Instance?.GameTime?.TotalGameTime.TotalSeconds ?? 0;
+            var action = storm ? MonsterActionType.Attack1 : MonsterActionType.Attack2;
+            foreach (var maya in world.Objects.OfType<Maya>().ToList())
+                maya.ApplyMonsterSkill(action, 0, 0, now, null);
+
+            if (world is not WalkableWorldControl { Walker: { } hero })
+                return null;
+
+            WorldObject effect = storm ? new MayaStormEffect(hero) : new MayaStoneRainEffect(hero);
+            world.Objects.Add(effect);
+            _ = effect.Load();
+            return effect;
         }
 
         [PacketHandler(0xD1, 0x07)] // KanturuMonsterUserCount (S2C)

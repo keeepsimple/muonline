@@ -1,22 +1,9 @@
-﻿using Client.Main.Content;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
 namespace Client.Main.Objects.Monsters
 {
-    public class BloodyDeathRider : MonsterObject
+    // Same skeleton and animations as DeathRider; only the skin differs.
+    [NpcInfo(550, "Bloody Death Rider")]
+    public class BloodyDeathRider : DeathRider
     {
-        public BloodyDeathRider()
-        {
-        }
-
-        public override async Task Load()
-        {
-            Model = await BMDLoader.Instance.Prepare($"Monster/Monster195.bmd");
-            await base.Load();
-        }
+        protected override string ModelPath => "Monster/Monster195.bmd";
     }
 }

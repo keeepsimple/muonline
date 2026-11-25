@@ -1,22 +1,9 @@
-﻿using Client.Main.Content;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
 namespace Client.Main.Objects.Monsters
 {
-    public class BloodyOrc : MonsterObject
+    // Same skeleton and animations as ForestOrc; only the skin differs.
+    [NpcInfo(549, "Bloody Orc")]
+    public class BloodyOrc : ForestOrc
     {
-        public BloodyOrc()
-        {
-        }
-
-        public override async Task Load()
-        {
-            Model = await BMDLoader.Instance.Prepare($"Monster/Monster194.bmd");
-            await base.Load();
-        }
+        protected override string ModelPath => "Monster/Monster194.bmd";
     }
 }

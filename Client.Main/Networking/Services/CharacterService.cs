@@ -2076,6 +2076,25 @@ namespace Client.Main.Networking.Services
             }
         }
 
+        /// <summary>Sends CrywolfContractRequest (0xBD/0x03) for the altar standing at the player's tile (masked altar id).</summary>
+        public async Task SendCrywolfContractRequestAsync(ushort altarNetworkId)
+        {
+            if (!_connectionManager.IsConnected) return;
+            try
+            {
+                await _connectionManager.Connection.SendAsync(() =>
+                {
+                    var packet = new CrywolfContractRequest(_connectionManager.Connection.Output.GetMemory(CrywolfContractRequest.Length).Slice(0, CrywolfContractRequest.Length));
+                    packet.StatueId = (ushort)(altarNetworkId & 0x7FFF);
+                    return CrywolfContractRequest.Length;
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error sending Crywolf contract request.");
+            }
+        }
+
         // Event NPC dialogs. The Write* methods build the packets into a cleared span of the packet length
         // and are public for the offline packet checks.
 
@@ -2091,6 +2110,25 @@ namespace Client.Main.Networking.Services
         {
             _ = new IllusionTempleEnterRequestRef(span) { MapNumber = temple, ItemSlot = ticketSlot };
             return IllusionTempleEnterRequestRef.Length;
+        }
+
+        public const int IllusionTempleSkillRequestLength = 9;
+
+        /// <summary>
+        /// IllusionTempleSkillRequest (0xBF/0x02) for the special skills 210-213: C1 09 BF 02, skill and target big endian,
+        /// distance (ignored by OpenMU). Written by hand: the packet struct of the referenced Network.Packets package has a
+        /// one-byte target, the server reads the 9-byte layout of its ClientToServerPackets.xml.
+        /// </summary>
+        public static int WriteIllusionTempleSkillRequest(Span<byte> span, ushort skill, ushort targetId, byte distance)
+        {
+            span[0] = 0xC1;
+            span[1] = IllusionTempleSkillRequestLength;
+            span[2] = 0xBF;
+            span[3] = 0x02;
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(span[4..], skill);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(span[6..], targetId);
+            span[8] = distance;
+            return IllusionTempleSkillRequestLength;
         }
 
         /// <summary>LuckyCoinCountRequest (0xBF/0x0B).</summary>
@@ -2126,6 +2164,9 @@ namespace Client.Main.Networking.Services
 
         public Task<bool> SendIllusionTempleEnterRequestAsync(byte temple, byte ticketSlot = 0xFF)
             => SendSimplePacketAsync("illusion temple enter request", () => WriteIllusionTempleEnterRequest(GetClearedPacketMemory(IllusionTempleEnterRequestRef.Length).Span, temple, ticketSlot));
+
+        public Task<bool> SendIllusionTempleSkillRequestAsync(ushort skill, ushort targetId, byte distance = 0)
+            => SendSimplePacketAsync("illusion temple skill request", () => WriteIllusionTempleSkillRequest(GetClearedPacketMemory(IllusionTempleSkillRequestLength).Span, skill, targetId, distance));
 
         public Task<bool> SendLuckyCoinCountRequestAsync()
             => SendSimplePacketAsync("lucky coin count request", () => WriteLuckyCoinCountRequest(GetClearedPacketMemory(LuckyCoinCountRequestRef.Length).Span));

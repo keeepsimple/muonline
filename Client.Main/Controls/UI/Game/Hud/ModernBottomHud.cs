@@ -316,8 +316,9 @@ namespace Client.Main.Controls.UI.Game.Hud
                 }
             }
 
-            // 1-0 → select skill slot
-            for (int i = PotionSlotCount; i < SlotCount; i++)
+            // 1-0 → select skill slot (Shift+1-4 cast the Illusion Temple skills while their bar is up)
+            bool illusionTempleKeys = IllusionTempleSkillBar.Instance.Visible && IllusionTempleSkillBar.IsShiftDown(kb);
+            for (int i = PotionSlotCount; i < SlotCount && !illusionTempleKeys; i++)
             {
                 if (kb.IsKeyDown(SlotKeys[i]) && !prev.IsKeyDown(SlotKeys[i]))
                 {

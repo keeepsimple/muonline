@@ -1,22 +1,9 @@
-﻿using Client.Main.Content;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
 namespace Client.Main.Objects.Monsters
 {
-    public class GenociderWarrior : MonsterObject
+    // Same skeleton and animations as Genocider; only the skin differs.
+    [NpcInfo(556, "Genocider Warrior")]
+    public class GenociderWarrior : Genocider
     {
-        public GenociderWarrior()
-        {
-        }
-
-        public override async Task Load()
-        {
-            Model = await BMDLoader.Instance.Prepare($"Monster/Monster201.bmd");
-            await base.Load();
-        }
+        protected override string ModelPath => "Monster/Monster201.bmd";
     }
 }

@@ -409,4 +409,111 @@ Check(Client.Main.Core.Utilities.SkillDatabase.GetSkillAnimation(326) == Client.
     "master Cyclone Strengthener uses the Cyclone animation");
 Check(Client.Main.Core.Utilities.SkillDatabase.GetSkillAnimation(328) == Client.Main.Core.Utilities.SkillDatabase.GetSkillAnimation(19),
     "master Falling Slash Strengthener uses the Falling Slash animation");
+// Kanturu Maya wide-area attack (D1/06) and the boss attack visuals.
+{
+    Client.Main.Constants.SOUND_EFFECTS = false;
+    var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+    var statics = BindingFlags.Static | BindingFlags.NonPublic;
+    Type stormType = assembly.GetType("Client.Main.Objects.Effects.MayaStormEffect")!;
+    Type rainType = assembly.GetType("Client.Main.Objects.Effects.MayaStoneRainEffect")!;
+
+    foreach (Type type in new[] { stormType, rainType })
+    {
+        var hero = new PlayerObject { NetworkId = 0x70 };
+        var fx = (WorldObject)Activator.CreateInstance(type, hero, false)!;
+        var has = type.GetMethod("HasActiveContent", flags)!;
+        var tick = type.GetMethod("OnTick", flags)!;
+        type.GetMethod("OnStart", flags)!.Invoke(fx, null);
+        bool activeAtStart = (bool)has.Invoke(fx, null)!;
+        int ticks = 0;
+        while (ticks < 400 && (bool)has.Invoke(fx, null)!) { tick.Invoke(fx, new object[] { 1f }); ticks++; }
+        Check(activeAtStart && ticks > 20 && ticks < 400, $"{type.Name} plays and finishes offline ({ticks} ticks)");
+        if (type == rainType)
+            Check((int)type.GetField("_landed", flags)!.GetValue(fx)! == 14, "Maya stone rain lands every stone before it ends");
+        fx.Dispose();
+        Check(fx.Status == GameControlStatus.Disposed, $"{type.Name} disposes cleanly");
+    }
+
+    // D1/06 through the real PacketRouter: the storm / stone rain spawns on the local hero.
+    var logs = Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance;
+    var settings = new Client.Main.Configuration.MuOnlineSettings { ProtocolVersion = "Season6" };
+    var state = new Client.Main.Core.Client.CharacterState(logs) { Id = 0x0070, Name = "Tester" };
+    var scope = new Client.Main.Core.Client.ScopeManager(logs, state);
+    var network = new Client.Main.Networking.NetworkManager(logs, settings, state, scope);
+    var router = (PacketRouter)typeof(Client.Main.Networking.NetworkManager)
+        .GetField("_packetRouter", flags)!.GetValue(network)!;
+    router.SetRoutingMode(false);
+    var dispatcher = (Client.Main.Controllers.MainThreadDispatcher)typeof(Client.Main.MuGame)
+        .GetField("_mainThreadDispatcher", statics)!.GetValue(null)!;
+
+    var kanturu = (Client.Main.Controls.WalkableWorldControl)System.Runtime.CompilerServices.RuntimeHelpers
+        .GetUninitializedObject(typeof(Client.Main.Worlds.KanturuWorld));
+    var objects = Activator.CreateInstance(typeof(Client.Main.Helpers.ChildrenCollection<WorldObject>),
+        BindingFlags.Instance | BindingFlags.NonPublic, null, new object?[] { null }, null)!;
+    typeof(Client.Main.Controls.WorldControl).GetProperty("Objects")!.SetValue(kanturu, objects);
+    kanturu.Walker = new PlayerObject { NetworkId = 0x70 };
+    var game = (Client.Main.MuGame)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Client.Main.MuGame));
+    var scene = (Client.Main.Scenes.BaseScene)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Client.Main.Scenes.GameScene));
+    typeof(Client.Main.Scenes.BaseScene).GetProperty("World", BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)!
+        .SetValue(scene, kanturu);
+    typeof(Client.Main.MuGame).GetProperty("ActiveScene")!.SetValue(game, scene);
+    var instance = typeof(Client.Main.MuGame).GetProperty("Instance", BindingFlags.Static | BindingFlags.Public)!;
+    instance.SetValue(null, game);
+    try
+    {
+        foreach (var (type, kind) in new[] { (stormType, (byte)0), (rainType, (byte)1) })
+        {
+            await router.RoutePacketAsync(new ReadOnlySequence<byte>(new byte[] { 0xC1, 7, 0xD1, 0x06, 0, 0, kind }));
+            dispatcher.ProcessPending();
+            var spawned = kanturu.Objects.FirstOrDefault(o => o.GetType() == type);
+            Check(spawned != null, $"D1/06 type {kind} spawns {type.Name} on the hero");
+            if (spawned != null)
+            {
+                kanturu.Objects.Remove(spawned);
+                spawned.Dispose();
+            }
+        }
+    }
+    finally
+    {
+        instance.SetValue(null, null);
+    }
+
+    var crywolfSkill = typeof(Client.Main.Networking.PacketHandling.Handlers.ScopeHandler)
+        .GetMethod("ResolveCrywolfMonsterSkill", statics)!;
+    Check(crywolfSkill.Invoke(null, new object[] { new Client.Main.Objects.Monsters.DarkElf(), (ushort)8 })!.ToString() == "Attack2" &&
+          crywolfSkill.Invoke(null, new object[] { new Client.Main.Objects.Monsters.Balram(), (ushort)9 })!.ToString() == "Attack2",
+        "Crywolf Dark Elf (8) and Balram (9) monster skills play ATTACK2");
+
+    // Every asset the new visuals reference exists in the 1.20.61 data list.
+    string dataList = Environment.GetEnvironmentVariable("MU_DATALIST") ??
+        System.IO.Path.Combine(AppContext.BaseDirectory, "datalist-1.20.61.txt");
+    if (!File.Exists(dataList))
+    {
+        Console.WriteLine($"[SKIP] boss visual assets: data list {dataList} not found");
+    }
+    else
+    {
+        var files = new HashSet<string>(File.ReadLines(dataList).Select(l => l.Split('\t')[0]), StringComparer.OrdinalIgnoreCase);
+        string Const(Type t, string name) => (string)t.GetField(name, BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public)!.GetValue(null)!;
+        Type modelFx = assembly.GetType("Client.Main.Objects.Effects.MonsterAttackModelEffect")!;
+        var assets = new List<string>
+        {
+            Const(stormType, "TornadoModelPath"), Const(stormType, "SmokeTexturePath"), Const(stormType, "ThunderTexturePath"),
+            Const(stormType, "SoundPath"), Const(rainType, "FireModelPath"), Const(rainType, "DustTexturePath"),
+            Const(rainType, "ImpactSoundPath"), Const(modelFx, "StrikeCrackModel"), Const(modelFx, "StrikeRingModel"),
+            Const(modelFx, "BurstModel"), Const(modelFx, "BurstWaveModel"), "Skill/Stone01.bmd", "Skill/Stone02.bmd",
+        };
+        assets.AddRange((string[])rainType.GetField("StoneModelPaths", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!);
+        static string ToData(string path) => "Data/" + Path.ChangeExtension(path, Path.GetExtension(path).ToLowerInvariant() switch
+        {
+            ".jpg" => ".OZJ",
+            ".tga" => ".OZT",
+            var ext => ext,
+        });
+        var missing = assets.Where(a => !files.Contains(ToData(a))).ToList();
+        Check(missing.Count == 0, $"boss visual assets exist in the data list ({assets.Count} checked)" +
+            (missing.Count > 0 ? ": missing " + string.Join(", ", missing) : ""));
+    }
+}
 return failures == 0 ? 0 : 1;

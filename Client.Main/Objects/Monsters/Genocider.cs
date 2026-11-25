@@ -10,6 +10,8 @@ namespace Client.Main.Objects.Monsters
     [NpcInfo(357, "Genocider")]
     public class Genocider : SoundMonsterObject
     {
+        protected virtual string ModelPath => "Monster/Monster114.bmd";
+
         protected override string AttackSoundPath => "Sound/w37/geno_attack-01.wav";
         protected override string DeathSoundPath => "Sound/w37/geno_death.wav";
 
@@ -26,7 +28,7 @@ namespace Client.Main.Objects.Monsters
 
         public override async Task Load()
         {
-            Model = await BMDLoader.Instance.Prepare($"Monster/Monster114.bmd");
+            Model = await BMDLoader.Instance.Prepare(ModelPath);
             await base.Load();
         }
     }

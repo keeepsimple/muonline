@@ -1,22 +1,9 @@
-﻿using Client.Main.Content;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
 namespace Client.Main.Objects.Monsters
 {
-    public class GigantisWarrior : MonsterObject
+    // Same skeleton and animations as Gigantis; only the skin differs.
+    [NpcInfo(555, "Gigantis Warrior")]
+    public class GigantisWarrior : Gigantis
     {
-        public GigantisWarrior()
-        {
-        }
-
-        public override async Task Load()
-        {
-            Model = await BMDLoader.Instance.Prepare($"Monster/Monster200.bmd");
-            await base.Load();
-        }
+        protected override string ModelPath => "Monster/Monster200.bmd";
     }
 }

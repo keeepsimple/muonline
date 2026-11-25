@@ -57,6 +57,31 @@ namespace Client.Main.Objects.Effects
             _ = effect.Load();
         }
 
+        internal const string StrikeCrackModel = "Effect/knight_plancrack_a.bmd";
+        internal const string StrikeRingModel = "Skill/Circle01.bmd";
+        internal const string BurstModel = "Skill/Inferno01.bmd";
+        internal const string BurstWaveModel = "Effect/shockwave_ground01.bmd";
+
+        /// <summary>Boss skill hitting one target: a cracked ground and a short magic ring under it.</summary>
+        internal static void SpawnBossStrike(MonsterObject boss, Vector3 target, Vector3 tint)
+        {
+            if (boss.World is not { } world)
+                return;
+
+            Spawn(world, StrikeCrackModel, target + Vector3.UnitZ * 4f, boss.Angle, tint, 1f, 1f, animated: true);
+            Spawn(world, StrikeRingModel, target + Vector3.UnitZ * 3f, boss.Angle, tint, 0.6f, 0.8f, endScale: 1.3f, animated: true);
+        }
+
+        /// <summary>Boss skill around itself: a fire ring and a ground shock wave spreading from the boss.</summary>
+        internal static void SpawnBossBurst(MonsterObject boss, Vector3 tint)
+        {
+            if (boss.World is not { } world)
+                return;
+
+            Spawn(world, BurstModel, boss.Position, boss.Angle, tint, 0.85f, 1.2f, endScale: 1.9f);
+            Spawn(world, BurstWaveModel, boss.Position + Vector3.UnitZ * 4f, Vector3.Zero, tint, 0.75f, 0.8f, endScale: 5f);
+        }
+
         public override async Task LoadContent()
         {
             await base.LoadContent();

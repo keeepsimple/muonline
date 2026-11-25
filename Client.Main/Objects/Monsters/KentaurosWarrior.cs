@@ -1,22 +1,9 @@
-﻿using Client.Main.Content;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
 namespace Client.Main.Objects.Monsters
 {
-    public class KentaurosWarrior : MonsterObject
+    // Same skeleton and animations as Kentauros; only the skin differs.
+    [NpcInfo(554, "Kentauros Warrior")]
+    public class KentaurosWarrior : Kentauros
     {
-        public KentaurosWarrior()
-        {
-        }
-
-        public override async Task Load()
-        {
-            Model = await BMDLoader.Instance.Prepare($"Monster/Monster199.bmd");
-            await base.Load();
-        }
+        protected override string ModelPath => "Monster/Monster199.bmd";
     }
 }

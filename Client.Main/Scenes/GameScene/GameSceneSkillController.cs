@@ -115,6 +115,14 @@ namespace Client.Main.Scenes
             if (IsMouseOverUi())
                 return;
 
+            // An armed Illusion Temple target skill takes the next right-click instead of the selected skill.
+            if (Controls.UI.Game.IllusionTempleSkillBar.Instance.ArmedSkill is ushort armed and not 0 && rightJustPressed)
+            {
+                TryCastIllusionTempleSkill(armed);
+                _scene.SetMouseInputConsumed();
+                return;
+            }
+
             // Allow continuous skill usage while holding right mouse button
             // The cooldown system (TryConsumeSkillDelay) will rate-limit the casting
             if (!rightPressed)
@@ -769,6 +777,51 @@ namespace Client.Main.Scenes
         /// <summary>Casts a support skill (heal, buffs, Soul Barrier) on another player, e.g. for the MU Helper.</summary>
         internal bool CastSkillOnPlayer(Core.Client.SkillEntryState skill, PlayerObject target) =>
             UseSkillOnPlayerTarget(skill, target);
+
+        /// <summary>
+        /// Casts an Illusion Temple special skill (IllusionTempleSkillRequest, 0xBF/0x02). Protection and Tracking act
+        /// on the hero; Restraint and Shield Burn use the hovered foe (any player - the server checks the team - or
+        /// monster) and are armed for the next right-click when nothing is hovered. The BF/02 answer gives the feedback.
+        /// </summary>
+        internal bool TryCastIllusionTempleSkill(ushort skill)
+        {
+            var bar = Controls.UI.Game.IllusionTempleSkillBar.Instance;
+            var hero = _scene.Hero;
+            if (hero == null || hero.IsDead)
+                return false;
+
+            if (!Controls.UI.Game.IllusionTempleSkillBar.CanAfford(skill, Controls.UI.Game.InstancedEventHud.Instance.SkillPoints))
+            {
+                bar.ArmedSkill = 0;
+                Networking.PacketHandling.Handlers.EventZoneHandler.ShowSystemMessage(
+                    $"Not enough kill points for {Networking.PacketHandling.Handlers.InstancedEventHandler.IllusionTempleSkillName(skill)}.");
+                return false;
+            }
+
+            ushort targetId = hero.NetworkId != 0 ? hero.NetworkId : MuGame.Network?.GetCharacterState()?.Id ?? 0;
+            byte distance = 0;
+            if (Controls.UI.Game.IllusionTempleSkillBar.NeedsTarget(skill))
+            {
+                WalkerObject target = GetHoveredSkillTarget();
+                if (target == null && _scene.MouseHoverObject is PlayerObject player && player != hero &&
+                    !player.IsDead && player.World == _scene.World)
+                    target = player;
+
+                if (target == null)
+                {
+                    bar.ArmedSkill = skill;
+                    return false;
+                }
+
+                hero.FaceTowardsObject(target, immediate: true);
+                targetId = target.NetworkId;
+                distance = (byte)Math.Min(255, Vector2.Distance(hero.Location, target.Location));
+            }
+
+            bar.ArmedSkill = 0;
+            _ = MuGame.Network?.GetCharacterService()?.SendIllusionTempleSkillRequestAsync(skill, targetId, distance);
+            return true;
+        }
 
         private bool UseSelfSkill(Core.Client.SkillEntryState skill, PlayerObject hero)
         {

@@ -1741,6 +1741,9 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 double now = MuGame.Instance.GameTime.TotalGameTime.TotalSeconds;
                 if (monster is Nightmare nightmare && skillId == 6 && world.MapId == 39 && !rotation.HasValue)
                     nightmare.PlayTeleport(arriving: false);
+                else if (monster is Nightmare && skillId == Nightmare.SpecialAttackSkill && world.MapId == 39)
+                    // The Kanturu runner broadcasts the special attack as a targetless Inferno: the ATTACK4 animation.
+                    monster.ApplyMonsterSkill(MonsterActionType.Attack4, skillId, 0, now, null);
                 else if (rotation.HasValue && targetPosition.HasValue)
                     monster.ApplyAreaAttack(skillId, targetPosition.Value, now, rotation.Value / 255f * 360f);
                 else

@@ -1,3 +1,4 @@
+using Client.Main.Controllers;
 using Client.Main.Controls;
 using Client.Main.Core.Utilities;
 using Client.Main.Objects.Worlds.Events;
@@ -25,7 +26,7 @@ namespace Client.Main.Worlds
         private AmbientFlockSystem _batFlock;
         public LostTowerWorld() : base(worldIndex: 5)
         {
-            BackgroundMusicPath = "Music/lost_tower_a.mp3";
+            BackgroundMusicPath = LowerFloorMusic;
             AmbientSoundPath = "Sound/aTower.wav"; // Tower atmosphere
             Name = "Lost Tower";
             // SourceMain5.2 lights the map with the terrain light map only (no extra ambient): darker, like the original.
@@ -59,6 +60,32 @@ namespace Client.Main.Worlds
             Objects.Add(_batFlock);
 
             base.AfterLoad();
+        }
+
+        private const string LowerFloorMusic = "Music/lost_tower_a.mp3";
+        private const string UpperFloorMusic = "Music/lost_tower_b.mp3";
+
+        /// <summary>
+        /// Floors 4-7 lie in the low-x/low-y quadrant of the map (OpenMU gates: floor 4 spawns at 87/86, 5 at 128/53,
+        /// 6 at 52/53, 7 at 8/85); floors 1-3 are at x &gt;= 162 or y &gt;= 160.
+        /// </summary>
+        // ponytail: coordinate quadrant, not per-floor areas; refine if a floor edge plays the wrong track.
+        public static bool IsUpperFloor(int x, int y) => x < 140 && y < 140;
+
+        public static string MusicFor(int x, int y) => IsUpperFloor(x, y) ? UpperFloorMusic : LowerFloorMusic;
+
+        public override void Update(GameTime time)
+        {
+            base.Update(time);
+            if (Status != Models.GameControlStatus.Ready || !Visible || AudioSuppressed || Walker == null)
+                return;
+
+            string music = MusicFor((int)Walker.Location.X, (int)Walker.Location.Y);
+            if (music != BackgroundMusicPath)
+            {
+                BackgroundMusicPath = music;
+                SoundController.Instance.PlayBackgroundMusic(music);
+            }
         }
 
         public override void Dispose()
