@@ -68,11 +68,28 @@ namespace Client.Main.Core.Utilities
             SkillDefinitions.GetSkillType(skillId);
 
         /// <summary>
-        /// Gets animation ID for skill by skill ID.
+        /// Gets animation ID for skill by skill ID. Master skills without an own mapping
+        /// use the animation of the skill they replace (e.g. Cyclone Strengthener → Cyclone).
         /// Returns -1 if no specific animation.
         /// </summary>
-        public static int GetSkillAnimation(int skillId) =>
-            SkillDefinitions.GetSkillAnimation(skillId);
+        public static int GetSkillAnimation(int skillId)
+        {
+            for (int depth = 0; depth < 4; depth++)
+            {
+                int animation = SkillDefinitions.GetSkillAnimation(skillId);
+                if (animation >= 0 || !MasterSkillReplaces.Value.TryGetValue(skillId, out int replaced))
+                    return animation;
+
+                skillId = replaced;
+            }
+
+            return -1;
+        }
+
+        private static readonly Lazy<Dictionary<int, int>> MasterSkillReplaces = new(() =>
+            ServerMasterSkills.All
+                .Where(e => e.Replaced != 0 && e.Replaced != e.Number)
+                .ToDictionary(e => (int)e.Number, e => (int)e.Replaced));
 
         /// <summary>
         /// Checks if skill is area type.

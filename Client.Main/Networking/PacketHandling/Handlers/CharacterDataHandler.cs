@@ -1745,6 +1745,11 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                     monster.ApplyAreaAttack(skillId, targetPosition.Value, now, rotation.Value / 255f * 360f);
                 else
                     monster.ApplyTargetedAttack(skillId, targetId, now, target);
+
+                // Monster-only skill visuals; other monster skills keep their per-monster attack effects.
+                if (skillId == Objects.Effects.Skills.DoppelgangerSelfExplosionSkillEffect.SkillId)
+                    Objects.Effects.Skills.SkillVisualEffectRegistry.SpawnInWorld(skillId,
+                        new Objects.Effects.Skills.SkillEffectContext { Caster = monster, TargetId = targetId, SkillId = skillId, World = world }, world);
                 return;
             }
 

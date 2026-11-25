@@ -130,10 +130,31 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             ushort skill = BinaryPrimitives.ReadUInt16BigEndian(span[5..]);
             ushort source = (ushort)(BinaryPrimitives.ReadUInt16LittleEndian(span[8..]) & 0x7FFF);
             if (source != _characterState.Id) return Task.CompletedTask;
+            ushort target = (ushort)(BinaryPrimitives.ReadUInt16LittleEndian(span[10..]) & 0x7FFF);
             EventZoneHandler.ShowSystemMessage(success
                 ? $"{IllusionTempleSkillName(skill)} activated."
                 : $"{IllusionTempleSkillName(skill)} could not be used.");
+            if (success) MuGame.ScheduleOnMainThread(() => SpawnIllusionTempleSkillVisual(skill, source, target));
             return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// BF/02 success visual (main thread). Tracking: the server sent the instant move (0x15) first, so the caster's
+        /// TargetPosition is already the destination while its drawn position is still the origin.
+        /// </summary>
+        internal static void SpawnIllusionTempleSkillVisual(ushort skill, ushort source, ushort target)
+        {
+            if (MuGame.Instance?.ActiveScene?.World is not Controls.WalkableWorldControl world || !world.TryGetWalkerById(source, out var caster))
+                return;
+
+            Objects.Effects.Skills.SkillVisualEffectRegistry.SpawnInWorld(skill, new Objects.Effects.Skills.SkillEffectContext
+            {
+                Caster = caster,
+                TargetId = target,
+                SkillId = skill,
+                TargetPosition = skill == 212 ? caster.TargetPosition : null,
+                World = world,
+            }, world);
         }
 
         [PacketHandler(0xBF, 0x03)] // IllusionTempleUserCount (S2C): players per temple, for the entrance dialog (OpenMU does not send it yet)
@@ -151,6 +172,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             if (packet.Length < 8) return Task.CompletedTask;
             ushort skill = BinaryPrimitives.ReadUInt16BigEndian(packet.Span[4..]);
             ushort target = (ushort)(BinaryPrimitives.ReadUInt16LittleEndian(packet.Span[6..]) & 0x7FFF);
+            MuGame.ScheduleOnMainThread(() => Objects.Effects.IllusionTempleOrderEffect.End(target, skill));
             if (target == _characterState.Id)
                 EventZoneHandler.ShowSystemMessage($"{IllusionTempleSkillName(skill)} has worn off.");
             return Task.CompletedTask;

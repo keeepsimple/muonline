@@ -56,6 +56,9 @@ namespace Client.Main.Core.Client
         IgnoreDefense = 129,
         IncreaseHealth = 130,
         IncreaseBlock = 131,
+        /// <summary>OpenMU Illusion Temple magic effects of skills 210 / 211 (same numbers as the skills).</summary>
+        IllusionTempleProtection = 210,
+        IllusionTempleRestraint = 211,
     }
 
     public class BuffStateChangedEventArgs : EventArgs

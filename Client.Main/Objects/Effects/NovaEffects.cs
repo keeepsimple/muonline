@@ -63,6 +63,11 @@ namespace Client.Main.Objects.Effects
         private float _glow;
         private float _lightTime;
 
+        // 25 Hz frames the caster may spend outside the charge action before the charge counts as cancelled
+        // (covers the gap between the effect spawn and the action switch).
+        private const float CancelGraceFrames = 12f;
+        private float _idleFrames;
+
         private NovaChargeEffect(WalkerObject caster)
             : base(caster, 0f, 0f, 4096)
         {
@@ -147,7 +152,16 @@ namespace Client.Main.Objects.Effects
         protected override void OnTick(float factor)
         {
             if (!_finishing && Caster is PlayerObject player && player.CurrentAction == PlayerAction.PlayerSkillHellBegin)
+            {
+                _idleFrames = 0f;
                 EmitCharge(player);
+            }
+            else if (!_finishing && (_idleFrames += factor) > CancelGraceFrames)
+            {
+                // The caster left PLAYER_SKILL_HELL_BEGIN without a release (died, entered a safe zone,
+                // server cancelled): the server sends no Nova (40) then, so the charge ends here.
+                Finish();
+            }
 
             float lightDecay = MathF.Pow(0.95f, factor);
             for (int i = 0; i < _lights.Length; i++)

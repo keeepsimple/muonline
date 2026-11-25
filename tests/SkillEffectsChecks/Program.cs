@@ -217,7 +217,7 @@ Check(mesh0 != null && mesh1 != null &&
     "shared U scroll still composes with mesh-specific V scroll");
 
 Type blurType = assembly.GetType("Client.Main.Objects.Effects.Joints.SourceObjectBlur")!;
-object blur = Activator.CreateInstance(blurType, nonPublic: true)!;
+object blur = Activator.CreateInstance(blurType, 600)!;
 var add = blurType.GetMethod("Add")!;
 var move = blurType.GetMethod("Move")!;
 var count = blurType.GetField("_count", BindingFlags.Instance | BindingFlags.NonPublic)!;
@@ -227,4 +227,186 @@ for (int i = 0; i < 30; i++) move.Invoke(blur, null);
 Check((int)count.GetValue(blur)! == 0, "object blur expires after 30 rendered frames");
 add.Invoke(blur, new object[] { Vector3.Zero, Vector3.One });
 Check((int)count.GetValue(blur)! == 1, "an expired blur can be reused for a new cast");
+// Dark Knight basic weapon skills + Defense, including master strengtheners through the fallback table.
+var knightWorld = (Client.Main.Controls.WalkableWorldControl)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Client.Main.Worlds.AcheronWorld));
+var knightFlags = BindingFlags.Instance | BindingFlags.NonPublic;
+foreach (var (skillId, motion) in new (ushort, string?)[]
+{
+    (18, null), (19, "FallingSlash"), (20, "Lunge"), (21, "Uppercut"), (22, "Cyclone"), (23, "Slash"),
+    (326, "Cyclone"), (327, "Slash"), (328, "FallingSlash"), (329, "Lunge"), (479, "Cyclone")
+})
+{
+    Check(SkillVisualEffectRegistry.HasEffect(skillId), $"Knight skill {skillId} has a visual");
+    var knightCaster = new PlayerObject();
+    bool spawned = SkillVisualEffectRegistry.TrySpawn(skillId,
+        new SkillEffectContext { Caster = knightCaster, World = knightWorld, SkillId = skillId }, out var knightFx);
+    if (!spawned || knightFx == null) { Check(false, $"Knight skill {skillId} creates its effect"); continue; }
+    Type fxType = knightFx.GetType();
+    if (motion != null)
+        Check(fxType.GetProperty("SkillMotion", knightFlags)!.GetValue(knightFx)!.ToString() == motion,
+            $"Knight skill {skillId} uses the {motion} motion");
+    var hasContent = fxType.GetMethod("HasActiveContent", knightFlags)!;
+    var tick = fxType.GetMethod("OnTick", knightFlags)!;
+    fxType.GetMethod("OnStart", knightFlags)!.Invoke(knightFx, null);
+    bool activeAtStart = (bool)hasContent.Invoke(knightFx, null)!;
+    int ticks = 0;
+    while (ticks < 300 && (bool)hasContent.Invoke(knightFx, null)!) { tick.Invoke(knightFx, new object[] { 1f }); ticks++; }
+    Check(activeAtStart && ticks > 2 && ticks < 300, $"Knight skill {skillId} plays and finishes offline ({ticks} ticks)");
+    knightFx.Dispose();
+    Check(knightFx.Status == GameControlStatus.Disposed, $"Knight skill {skillId} effect disposes cleanly");
+}
+// Nova (58 charge, 40 release) and Phoenix Shot (270).
+{
+    Client.Main.Constants.SOUND_EFFECTS = false;
+    var fxFlags = BindingFlags.Instance | BindingFlags.NonPublic;
+    var fxWorld = (Client.Main.Controls.WalkableWorldControl)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Client.Main.Worlds.AcheronWorld));
+    foreach (ushort id in new ushort[] { 40, 58, 270 })
+        Check(SkillVisualEffectRegistry.HasEffect(id), $"skill {id} resolves to a visual effect");
+
+    int RunToEnd(object fx, int max)
+    {
+        var type = fx.GetType();
+        var has = type.GetMethod("HasActiveContent", fxFlags)!;
+        var tick = type.GetMethod("OnTick", fxFlags)!;
+        int n = 0;
+        while (n < max && (bool)has.Invoke(fx, null)!) { tick.Invoke(fx, new object[] { 1f }); n++; }
+        return n;
+    }
+
+    Type chargeType = assembly.GetType("Client.Main.Objects.Effects.NovaChargeEffect")!;
+    var activeCharges = (System.Collections.IDictionary)chargeType.GetField("Active", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+    object NewCharge(PlayerObject caster)
+    {
+        // GetOrCreate adds to a live world; register the same way without one.
+        var fx = Activator.CreateInstance(chargeType, fxFlags, null, new object[] { caster }, null)!;
+        activeCharges[caster.NetworkId] = fx;
+        return fx;
+    }
+
+    // Charge -> stage update -> release (the 40 factory consumes the stage and ends the charge).
+    var novaCaster = new PlayerObject { NetworkId = 0x51 };
+    novaCaster.CurrentAction = PlayerAction.PlayerSkillHellBegin;
+    var charge = NewCharge(novaCaster);
+    var chargeTick = chargeType.GetMethod("OnTick", fxFlags)!;
+    for (int i = 0; i < 30; i++) chargeTick.Invoke(charge, new object[] { 1f });
+    chargeType.GetMethod("UpdateStage")!.Invoke(null, new object?[] { null, (ushort)0x51, (byte)5 });
+    Check((bool)chargeType.GetMethod("HasActiveContent", fxFlags)!.Invoke(charge, null)! &&
+          (byte)chargeType.GetProperty("Stage")!.GetValue(charge)! == 5,
+        "Nova charge stays alive while charging and takes the server stage");
+    novaCaster.CurrentAction = PlayerAction.PlayerSkillHellStart;
+    var release = new NovaSkillEffect().CreateEffect(new SkillEffectContext { Caster = novaCaster, World = fxWorld, SkillId = 40 });
+    Check(release != null && (byte)release.GetType().GetField("_stage", fxFlags)!.GetValue(release)! == 5 &&
+          !activeCharges.Contains((ushort)0x51),
+        "Nova release consumes the charge stage and unregisters the charge");
+    Check(RunToEnd(charge, 200) < 200, "Nova charge visual ends after release");
+    release!.GetType().GetMethod("OnStart", fxFlags)!.Invoke(release, null);
+    int releaseTicks = RunToEnd(release, 400);
+    Check(releaseTicks > 10 && releaseTicks < 400, $"Nova release shockwave plays and finishes offline ({releaseTicks} ticks)");
+    release.Dispose();
+    ((IDisposable)charge).Dispose();
+
+    // Cancel: the caster leaves the charge action (death, safe zone) and no release ever arrives.
+    var cancelCaster = new PlayerObject { NetworkId = 0x52 };
+    cancelCaster.CurrentAction = PlayerAction.PlayerSkillHellBegin;
+    var cancelled = NewCharge(cancelCaster);
+    for (int i = 0; i < 5; i++) chargeTick.Invoke(cancelled, new object[] { 1f });
+    cancelCaster.CurrentAction = PlayerAction.PlayerDie1;
+    int cancelTicks = RunToEnd(cancelled, 200);
+    Check(cancelTicks < 200 && !activeCharges.Contains((ushort)0x52), $"Nova charge is cleaned up when the cast is cancelled ({cancelTicks} ticks)");
+    var lateRelease = new NovaSkillEffect().CreateEffect(new SkillEffectContext { Caster = cancelCaster, World = fxWorld, SkillId = 40 });
+    Check(lateRelease != null && (byte)lateRelease.GetType().GetField("_stage", fxFlags)!.GetValue(lateRelease)! == 0,
+        "Nova release after a cancelled charge still plays without a stale stage");
+    lateRelease?.Dispose();
+    ((IDisposable)cancelled).Dispose();
+
+    // Phoenix Shot from the area packet (target area centre, no target id).
+    var phoenixCaster = new PlayerObject { NetworkId = 0x53 };
+    var phoenix = new PhoenixShotSkillEffect().CreateEffect(new SkillEffectContext
+    {
+        Caster = phoenixCaster, World = fxWorld, SkillId = 270, TargetPosition = new Vector3(300f, 0f, 0f)
+    })!;
+    Type phoenixType = phoenix.GetType();
+    phoenixType.GetMethod("OnStart", fxFlags)!.Invoke(phoenix, null);
+    var phoenixTick = phoenixType.GetMethod("OnTick", fxFlags)!;
+    var impacted = phoenixType.GetProperty("Impacted", fxFlags)!;
+    int flight = 0;
+    while (flight < 50 && !(bool)impacted.GetValue(phoenix)!) { phoenixTick.Invoke(phoenix, new object[] { 1f }); flight++; }
+    Vector3 phoenixEnd = (Vector3)phoenixType.GetField("_end", fxFlags)!.GetValue(phoenix)!;
+    Check(flight > 5 && flight < 20 && Math.Abs(phoenixEnd.X - 300f) < 0.01f, $"Phoenix Shot flies to the target area ({flight} ticks)");
+    int phoenixTicks = RunToEnd(phoenix, 300);
+    Check(phoenixTicks > 5 && phoenixTicks < 300, $"Phoenix Shot fire impact plays and finishes offline ({phoenixTicks} ticks)");
+    phoenix.Dispose();
+    Check(phoenix.Status == GameControlStatus.Disposed, "Phoenix Shot effect disposes cleanly");
+}
+// Illusion Temple 210-213 and Doppelganger Self Explosion 239.
+{
+    var itWorld = (Client.Main.Controls.WalkableWorldControl)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Client.Main.Worlds.AcheronWorld));
+    var itFlags = BindingFlags.Instance | BindingFlags.NonPublic;
+    WorldObject? Spawn(ushort skillId, WalkerObject caster, ushort targetId = 0) =>
+        SkillVisualEffectRegistry.TrySpawn(skillId, new SkillEffectContext { Caster = caster, TargetId = targetId, SkillId = skillId, World = itWorld }, out var fx) ? fx : null;
+    bool Active(WorldObject fx) => (bool)fx.GetType().GetMethod("HasActiveContent", itFlags)!.Invoke(fx, null)!;
+    int Run(WorldObject fx, int max)
+    {
+        var tick = fx.GetType().GetMethod("OnTick", itFlags)!;
+        int n = 0;
+        while (n < max && Active(fx)) { tick.Invoke(fx, new object[] { 1f }); n++; }
+        return n;
+    }
+    void Start(WorldObject fx) => fx.GetType().GetMethod("OnStart", itFlags)!.Invoke(fx, null);
+
+    foreach (ushort id in new ushort[] { 210, 211, 212, 213, 239 })
+        Check(SkillVisualEffectRegistry.HasEffect(id), $"Skill {id} has a visual");
+
+    var warded = new PlayerObject { NetworkId = 0x60 };
+    var ward = Spawn(210, warded)!;
+    Start(ward);
+    Check(ward.GetType().Name == "IllusionTempleOrderEffect" && Run(ward, 100) == 100,
+        "Order of Protection ward persists while the order lasts");
+    Check(ReferenceEquals(Spawn(210, warded), ward), "a repeated Order of Protection refreshes the live ward");
+    var endMethod = ward.GetType().GetMethod("End", BindingFlags.Static | BindingFlags.Public)!;
+    endMethod.Invoke(null, new object[] { (ushort)0x60, (ushort)210 });
+    int fadeTicks = Run(ward, 100);
+    Check(fadeTicks > 0 && fadeTicks < 20 && !Active(ward), $"Order of Protection ward fades out after it ends ({fadeTicks} ticks)");
+    ward.Dispose();
+    var fresh = Spawn(210, warded);
+    Check(fresh != null && !ReferenceEquals(fresh, ward), "a disposed ward is not reused");
+    fresh?.Dispose();
+
+    var bound = new PlayerObject { NetworkId = 0x61 };
+    var bind = Spawn(211, warded, 0x61);
+    Check(bind == null, "Order of Restraint needs a resolvable target");
+    bind = Spawn(211, bound, 0x61)!;
+    Start(bind);
+    int bindTicks = Run(bind, 1000);
+    Check(bindTicks > 450 && bindTicks < 600 && !Active(bind), $"Order of Restraint bind ends after its maximum lifetime ({bindTicks} ticks)");
+    bind.Dispose();
+
+    foreach (var (id, target) in new (ushort, ushort)[] { (212, 0), (213, 0x61) })
+    {
+        var fx = Spawn(id, bound, target);
+        if (fx == null) { Check(false, $"Skill {id} creates its effect"); continue; }
+        Start(fx);
+        int ticks = Run(fx, 300);
+        Check(ticks > 2 && ticks < 300, $"Skill {id} {fx.GetType().Name} plays and finishes offline ({ticks} ticks)");
+        fx.Dispose();
+        Check(fx.Status == GameControlStatus.Disposed, $"Skill {id} effect disposes cleanly");
+    }
+
+    var doppelganger = new Client.Main.Objects.Monsters.Doppleganger();
+    var blast = Spawn(239, doppelganger);
+    if (blast == null) Check(false, "Doppelganger Self Explosion creates its effect");
+    else
+    {
+        Start(blast);
+        int ticks = Run(blast, 300);
+        Check(ticks > 2 && ticks < 300, $"Doppelganger Self Explosion bursts and finishes offline ({ticks} ticks)");
+        blast.Dispose();
+    }
+}
+// Master skills have no own animation entry and must reuse the replaced skill's swing.
+Check(Client.Main.Core.Utilities.SkillDatabase.GetSkillAnimation(326) == Client.Main.Core.Utilities.SkillDatabase.GetSkillAnimation(22)
+      && Client.Main.Core.Utilities.SkillDatabase.GetSkillAnimation(22) >= 0,
+    "master Cyclone Strengthener uses the Cyclone animation");
+Check(Client.Main.Core.Utilities.SkillDatabase.GetSkillAnimation(328) == Client.Main.Core.Utilities.SkillDatabase.GetSkillAnimation(19),
+    "master Falling Slash Strengthener uses the Falling Slash animation");
 return failures == 0 ? 0 : 1;

@@ -64,6 +64,11 @@ namespace Client.Main.Effects
                         walker => new StunRingsEffect(walker));
                     break;
 
+                case BuffEffectId.IllusionTempleProtection:
+                case BuffEffectId.IllusionTempleRestraint:
+                    ApplyIllusionTempleOrder(scene, maskedId, (ushort)effectId, isActive);
+                    break;
+
                 case BuffEffectId.LightningShockDamage:
                     // InsertBuffPhysicalEffect creates a one-shot impact when status 85 arrives.
                     if (isActive)
@@ -105,6 +110,25 @@ namespace Client.Main.Effects
                     _logger?.LogTrace("No visual effect mapped for buff {EffectId}", effectId);
                     break;
             }
+        }
+
+        /// <summary>
+        /// Illusion Temple orders seen by every observer: the status shows the skill visual (refreshing the one the
+        /// own BF/02 may already have created); its end fades it out like BF/07.
+        /// </summary>
+        private static void ApplyIllusionTempleOrder(Scenes.GameScene scene, ushort playerId, ushort skill, bool isActive)
+        {
+            if (!isActive)
+            {
+                Objects.Effects.IllusionTempleOrderEffect.End(playerId, skill);
+                return;
+            }
+
+            if (scene.World is not Controls.WalkableWorldControl world || !world.TryGetWalkerById(playerId, out var walker))
+                return;
+
+            Objects.Effects.Skills.SkillVisualEffectRegistry.SpawnInWorld(skill,
+                new Objects.Effects.Skills.SkillEffectContext { Caster = walker, TargetId = playerId, SkillId = skill, World = world }, world);
         }
 
         /// <summary>

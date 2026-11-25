@@ -929,10 +929,11 @@ Check(!CrywolfEventState.Active && CrywolfEventState.Heroes.Count == 0, "BD/00 E
           && InstancedEventHandler.DescribeIllusionTempleEnter(4) == "The Illusion Temple is full."
           && InstancedEventHandler.DescribeIllusionTempleEnter(7)!.Contains("Player killers"),
           "BF/00 shows the Illusion Temple refusals the server does not explain");
-    Check(await RouteCounting(C1(0xBF, 0x02, 1, 0x00, 0xD2, 0, 0x42, 0x00, 0x43, 0x00)) == 1
+    Check(await RouteCounting(C1(0xBF, 0x02, 1, 0x00, 0xD2, 0, 0x42, 0x00, 0x43, 0x00)) == 2
+          && await RouteCounting(C1(0xBF, 0x02, 0, 0x00, 0xD2, 0, 0x42, 0x00, 0x43, 0x00)) == 1
           && await RouteCounting(C1(0xBF, 0x02, 0, 0x00, 0xD2, 0, 0x77, 0x00, 0x43, 0x00)) == 0
           && InstancedEventHandler.IllusionTempleSkillName(210) == "Order of Protection",
-          "BF/02 reports the own skill usage result only");
+          "BF/02 reports the own skill usage result only and spawns the visual on success");
     byte[] NpcWindow(NpcWindowResponse.NpcWindow window, byte extra = 0)
     {
         var data = new byte[NpcWindowResponse.Length];
@@ -949,8 +950,19 @@ Check(!CrywolfEventState.Active && CrywolfEventState.Heroes.Count == 0, "BD/00 E
     Check(temples.ButtonText(1) == "TEMPLE 1 (1)" && temples.ButtonText(6) == "TEMPLE 6 (6)", "BF/03 shows the players per temple in the entry dialog");
     await Route(C1(0xBF, 0x00, 0));
     Check(!temples.Visible, "BF/00 success closes the Illusion Temple entry dialog");
-    Check(await RouteCounting(C1(0xBF, 0x07, 0x00, 0xD3, 0x42, 0x00)) == 1 && await RouteCounting(C1(0xBF, 0x07, 0x00, 0xD3, 0x50, 0x00)) == 0,
-          "BF/07 reports a skill that wore off on the own character");
+    // A Restraint bind on object 0x50 (created like the 0x07 status / BF/02 would) and an unrelated Protection ward.
+    var itWorld = (Client.Main.Controls.WalkableWorldControl)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Client.Main.Worlds.AcheronWorld));
+    var bound = new Client.Main.Objects.Player.PlayerObject { NetworkId = 0x50 };
+    var itFactory = new Client.Main.Objects.Effects.Skills.IllusionTempleSkillEffect();
+    var bind = itFactory.CreateEffect(new Client.Main.Objects.Effects.Skills.SkillEffectContext { Caster = bound, TargetId = 0x50, SkillId = 211, World = itWorld })!;
+    var ward = itFactory.CreateEffect(new Client.Main.Objects.Effects.Skills.SkillEffectContext { Caster = bound, TargetId = 0x50, SkillId = 210, World = itWorld })!;
+    bool Stopped(WorldObject fx) => (bool)fx.GetType().GetProperty("IsStopped")!.GetValue(fx)!;
+    Check(await RouteCounting(C1(0xBF, 0x07, 0x00, 0xD3, 0x42, 0x00)) == 2 && await RouteCounting(C1(0xBF, 0x07, 0x00, 0xD3, 0x50, 0x00)) == 1,
+          "BF/07 reports a skill that wore off on the own character and ends its visual for anyone");
+    Check(Stopped(bind) && !Stopped(ward), "BF/07 211 on 0x50 ends the Restraint bind only");
+    await Route(C1(0xBF, 0x07, 0x00, 0xD2, 0x50, 0x00));
+    Check(Stopped(ward), "BF/07 210 ends the Protection ward");
+    bind.Dispose(); ward.Dispose();
     Check(InstancedEventHandler.DescribeDoppelgangerEnter(2)!.Contains("commenced") && InstancedEventHandler.DescribeDoppelgangerEnter(4) == null
           && InstancedEventHandler.DescribeDoppelgangerEnter(3)!.Contains("Outlaw"),
           "BF/0E shows the Doppelganger refusals");
