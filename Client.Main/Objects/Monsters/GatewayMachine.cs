@@ -24,6 +24,12 @@ namespace Client.Main.Objects.Monsters
 
         protected override void HandleClick()
         {
+            // The server answers with KanturuStateInfo (0xD1/0x00), which opens the entry dialog.
+            var svc = MuGame.Network?.GetCharacterService();
+            if (svc != null)
+            {
+                _ = svc.SendTalkToNpcRequestAsync(NetworkId);
+            }
         }
     }
 }

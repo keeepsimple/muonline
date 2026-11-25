@@ -341,6 +341,122 @@ Check(!buffManager.HasBuff(0x42, BuffEffectId.SwellLife) &&
       buffEvents.LastOrDefault() is { EffectId: BuffEffectId.SwellLife, IsActive: false },
     "disconnect cleanup clears active buffs and emits removal");
 
+// 4A RageAttack (C3, the SkillAnimation layout) and 4B RageAttackRangeResponse (own Dark Side, LE ids, 10000 = unused)
+// go through the skill animation path; without a scene only the routing is observable.
+await Route(new byte[] { 0xC3, 9, 0x4A, 0x01, 0x07, 0x00, 0x43, 0x80, 0x44 });
+var rageRange = new byte[16];
+rageRange[0] = 0xC1; rageRange[1] = 16; rageRange[2] = 0x4B;
+BinaryPrimitives.WriteUInt16LittleEndian(rageRange.AsSpan(4), 263);
+BinaryPrimitives.WriteUInt16LittleEndian(rageRange.AsSpan(6), 0x44);
+for (int i = 8; i < 16; i += 2) BinaryPrimitives.WriteUInt16LittleEndian(rageRange.AsSpan(i), 10000);
+await Route(rageRange);
+Check(router.GetUnhandledPacketCounts().Keys.All(k => k.Code is not (0x4A or 0x4B)), "4A/4B rage attack packets are handled");
+
+// 3F/02 open, 3F/03 close (own id 0x42), 3F/0A price types: WCoin (C) and Jewel of Bless (group 14, number 13).
+await Route(C1(0x3F, 0x02, 1));
+Check(state.IsPlayerShopOpen, "3F/02 own player shop open");
+await Route(C1(0x3F, 0x03, 1, 0x00, 0x42));
+Check(!state.IsPlayerShopOpen, "3F/03 own player shop closed");
+await Route(C1(0x3F, 0x0A, 2, 0xF0, 0xFF, 0x0D, 0xE0));
+Check(state.PlayerShopPriceTypes.SequenceEqual(new ushort[] { 0xFFF0, 0xE00D }), "3F/0A player shop price types stored",
+    string.Join(",", state.PlayerShopPriceTypes.Select(t => t.ToString("X4"))));
+
+// DE/00 class unlock: Summoner | Rage Fighter. F3/15 CharacterFocused is only acknowledged.
+await Route(C1(0xDE, 0x00, 0x09));
+Check((byte)state.CharacterCreationUnlockFlags == 0x09, "DE/00 class creation unlock flags stored", $"{state.CharacterCreationUnlockFlags}");
+await Route(C1(new byte[] { 0xF3, 0x15 }.Concat(Encoding.UTF8.GetBytes("Tester\0\0\0\0")).Append((byte)0).ToArray()));
+
+// 88 ItemCraftingPreviewExtended: mix 3, 45 %, 1,000,000 zen; cleared with the mix box.
+var preview = C1(0x88, 3, 45, 0, 0, 0, 0, 0, 0, 0);
+BinaryPrimitives.WriteUInt32LittleEndian(preview.AsSpan(8), 1_000_000);
+await Route(preview);
+Check(state.ChaosMachineCraftingPreview == (3, 45, 1_000_000u), "88 crafting preview stored", $"{state.ChaosMachineCraftingPreview}");
+state.ClearChaosMachineItems();
+Check(state.ChaosMachineCraftingPreview == null, "88 crafting preview dropped with the mix box");
+
+// BF/20 InventoryItemEquipResult: the item in slot 20 is now in use (durability 255).
+state.AddOrUpdateInventoryItem(20, new byte[] { 10, 0, 1, 0, 0, 0xD0, 0, 0, 0, 0, 0, 0 });
+await Route(C1(0xBF, 0x20, 20, 255));
+Check(Client.Main.Core.Utilities.ItemDatabase.GetItemDurability(state.GetInventoryItems()[20]) == 255, "BF/20 inventory item use state updates durability");
+
+// D2/11 + D2/12 period item: slot 20 expires at 2030-01-01; the expiry goes with the item.
+var expiry = new DateTime(2030, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+await Route(C1(0xD2, 0x11));
+var period = C1(0xD2, 0x12, 0, 0, 20, 0, 0, 0, 0, 0);
+BinaryPrimitives.WriteUInt32LittleEndian(period.AsSpan(8), (uint)new DateTimeOffset(expiry).ToUnixTimeSeconds());
+await Route(period);
+Check(state.TryGetItemExpiration(20, out var expiresAt) && expiresAt == expiry, "D2/12 period item expiration stored", $"{expiresAt:O}");
+state.RemoveInventoryItem(20);
+Check(!state.TryGetItemExpiration(20, out _), "period item expiration removed with the item");
+
+// F5/01 AvailableChatCommand: "/move" (Name "Move", 345 bytes without parameters).
+var command = new byte[341];
+command[0] = 0x01; command[2] = 1;
+Encoding.UTF8.GetBytes("/move").CopyTo(command, 5);
+Encoding.UTF8.GetBytes("Move").CopyTo(command, 37);
+Encoding.UTF8.GetBytes("Warps to a map").CopyTo(command, 85);
+await Route(C2(0xF5, command));
+Check(state.AvailableChatCommands.Count == 1 && state.AvailableChatCommands[0].Command == "/move" && state.AvailableChatCommands[0].Description == "Warps to a map",
+    "F5/01 chat command stored", string.Join(",", state.AvailableChatCommands.Select(c => c.Command)));
+
+// F5/03 DiscordIntegrationInfo: linked as "muuser", guild chat bridged. F5/05 link code.
+var discord = new byte[224];
+discord[0] = 0xC1; discord[1] = 224; discord[2] = 0xF5; discord[3] = 0x03; discord[4] = 1; discord[5] = 1;
+Encoding.UTF8.GetBytes("https://discord.gg/x").CopyTo(discord, 92);
+Encoding.UTF8.GetBytes("muuser").CopyTo(discord, 192);
+await Route(discord);
+Check(state.DiscordIntegration is { IsAccountLinked: true, IsGuildChatBridged: true, IsWorldChatBridged: false, LinkedUserName: "muuser", InviteUrl: "https://discord.gg/x" },
+    "F5/03 Discord integration info stored", $"{state.DiscordIntegration}");
+await Route(C1(new byte[] { 0xF5, 0x05, 0 }.Concat(Encoding.UTF8.GetBytes("ABCD-EFGH\0")).Append((byte)10).ToArray()));
+
+// F5/07 ExternalChatMessage (guild chat from Discord).
+var external = new byte[3 + 48 + 6];
+external[0] = 0x07;
+Encoding.UTF8.GetBytes("Bob").CopyTo(external, 3);
+Encoding.UTF8.GetBytes("hello").CopyTo(external, 51);
+await Route(C2(0xF5, external));
+
+// F5/09 WarpListExtended: Lorencia (known, index 2) and an unknown index 200; F5/0B: index 200 needs master level 5.
+var warpList = new byte[2 + 2 * 44];
+warpList[0] = 0x09; warpList[1] = 2;
+void WarpEntry(int at, ushort index, ushort level, uint costs, string name)
+{
+    BinaryPrimitives.WriteUInt16LittleEndian(warpList.AsSpan(at), index);
+    BinaryPrimitives.WriteUInt16LittleEndian(warpList.AsSpan(at + 4), level);
+    BinaryPrimitives.WriteUInt32LittleEndian(warpList.AsSpan(at + 8), costs);
+    Encoding.UTF8.GetBytes(name).CopyTo(warpList, at + 12);
+}
+WarpEntry(2, 2, 1, 2000, "Server Lorencia");
+WarpEntry(46, 200, 10, 5000, "Custom Map");
+await Route(C2(0xF5, warpList));
+var warpRequirements = new byte[2 + 8];
+warpRequirements[0] = 0x0B; warpRequirements[1] = 1;
+BinaryPrimitives.WriteUInt16LittleEndian(warpRequirements.AsSpan(2), 200);
+BinaryPrimitives.WriteUInt16LittleEndian(warpRequirements.AsSpan(4), 5);
+await Route(C2(0xF5, warpRequirements));
+var warps = Client.Main.Data.MoveCommandDataManager.Instance.GetMoveCommandDataList();
+var customWarp = warps.FirstOrDefault(w => w.Index == 200);
+var lorencia = warps.FirstOrDefault(w => w.Index == 2);
+Check(warps.Count == 2 && customWarp.DisplayName == "Custom Map" && customWarp.RequiredZen == 5000 && customWarp.RequiredMasterLevel == 5 &&
+      lorencia.DisplayName != null && lorencia.DisplayName != "Server Lorencia" && lorencia.RequiredMasterLevel == 0,
+    "F5/09 + F5/0B server warp list feeds the warp window", string.Join(", ", warps.Select(w => $"{w.Index}:{w.DisplayName}/ML{w.RequiredMasterLevel}")));
+
+// F5/0D RoundTripResponse with a token sent 5 ms ago.
+var roundTrip = C1(0xF5, 0x0D, 0, 0, 0, 0);
+BinaryPrimitives.WriteInt32LittleEndian(roundTrip.AsSpan(4), Environment.TickCount - 5);
+await Route(roundTrip);
+Check(state.LastRoundTripMilliseconds is >= 5 and < 1000, "F5/0D round trip time measured", $"{state.LastRoundTripMilliseconds}");
+
+// F8/05 AssignCharactersToGens: player 0x0043 (high bit set on the wire) is a Duprian of rank 3.
+var gensAssign = new byte[2 + 16];
+gensAssign[0] = 0x05; gensAssign[1] = 1;
+gensAssign[2] = 1; gensAssign[3] = 0x80; gensAssign[4] = 0x43;
+BinaryPrimitives.WriteUInt32LittleEndian(gensAssign.AsSpan(10), 3);
+await Route(C2(0xF8, gensAssign));
+Check(network.GetGensManager().TryGetPlayerGens(0x43, out var playerGens, out var gensRank) &&
+      playerGens == MUnique.OpenMU.Network.Packets.ClientToServer.GensType.Duprian && gensRank == 3,
+    "F8/05 gens of a player in scope stored", $"{playerGens} rank {gensRank}");
+
 // Nothing of the above may end up as unhandled.
 var unhandled = router.GetUnhandledPacketCounts();
 Check(unhandled.Count == 0, "All packets were routed to a handler", string.Join(", ", unhandled.Select(u => $"{u.Key.Code:X2}-{u.Key.SubCode:X2}")));

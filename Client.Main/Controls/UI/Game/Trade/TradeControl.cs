@@ -1545,9 +1545,12 @@ namespace Client.Main.Controls.UI.Game.Trade
 
         private void OnTradeFinished(TradeFinished.TradeResult result)
         {
+            // A trade ended by a dropped connection (IsInGame already false) must not replace "Connection lost.".
+            bool showMessage = _characterState?.IsInGame == true;
             MuGame.ScheduleOnMainThread(() =>
             {
                 Hide();
+                if (!showMessage) return;
 
                 string message = result switch
                 {

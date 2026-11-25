@@ -138,8 +138,15 @@ namespace Client.Main.Core.Utilities
         }
 
         public static ChaosMixEvaluation EvaluateChaosMachine(IReadOnlyList<InventoryItem> items)
+            => Evaluate(items, GetChaosMachineRecipes());
+
+        /// <summary>Recipes of several mix groups, e.g. the two dialogs of the Seed Master.</summary>
+        public static IReadOnlyList<MixRecipe> GetRecipes(IEnumerable<MixInventoryType> types)
+            => types.SelectMany(GetRecipes).ToList();
+
+        /// <summary>Finds the recipe matching the mix box items among <paramref name="recipes"/> (the opened NPC's mix groups).</summary>
+        public static ChaosMixEvaluation Evaluate(IReadOnlyList<InventoryItem> items, IReadOnlyList<MixRecipe> recipes)
         {
-            var recipes = GetChaosMachineRecipes();
             if (recipes.Count == 0)
             {
                 return new ChaosMixEvaluation();

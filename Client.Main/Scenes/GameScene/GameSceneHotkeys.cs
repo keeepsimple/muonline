@@ -183,6 +183,9 @@ namespace Client.Main.Scenes
             hotkeys.OnKeyPressed(Keys.M, ToggleMoveCommand, when: WhenMoveCommandToggle);
             hotkeys.OnKeyPressed(Keys.G, ToggleGuildWindow, when: WhenNotUiInput);
             hotkeys.OnKeyPressed(Keys.F, ToggleFriendWindow, when: WhenNotUiInput);
+            hotkeys.OnKeyPressed(Keys.Home, ToggleMuHelperWindow, when: WhenNotUiInput);
+            hotkeys.OnKeyPressed(Keys.N, ToggleGensWindow, when: WhenNotUiInput);
+            hotkeys.OnKeyPressed(Keys.X, ToggleCashShop, when: WhenNotUiInput);
             hotkeys.OnKeyPressed(Keys.Tab, ToggleMiniMap, when: WhenMiniMapToggle);
             hotkeys.OnKeyPressed(Keys.Enter, OpenChatInput, when: WhenNotUiInput);
         }
@@ -281,6 +284,21 @@ namespace Client.Main.Scenes
         private void ToggleFriendWindow(HotkeyContext context)
         {
             _scene.FriendList?.Toggle();
+        }
+
+        private void ToggleGensWindow(HotkeyContext context)
+        {
+            _scene.GensInfo?.Toggle();
+        }
+
+        private void ToggleCashShop(HotkeyContext context)
+        {
+            _scene.CashShopWindow?.ToggleShop();
+        }
+
+        private void ToggleMuHelperWindow(HotkeyContext context)
+        {
+            _scene.MuHelper?.Window.Toggle();
         }
 
         private void ToggleGuildWindow(HotkeyContext context)

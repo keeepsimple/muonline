@@ -1849,7 +1849,7 @@ namespace Client.Main.Controls.UI.Game.Inventory
 
                     _ = Task.Run(async () =>
                     {
-                        await svc.SendStorageItemMoveAsync(ItemStorageKind.Inventory, slotIndex, ItemStorageKind.ChaosMachine, toSlot, _networkManager.TargetVersion, raw);
+                        await svc.SendStorageItemMoveAsync(ItemStorageKind.Inventory, slotIndex, chaos.StorageKind, toSlot, _networkManager.TargetVersion, raw);
                         await Task.Delay(1200);
                         if (_networkManager != null && state.IsInventoryMovePending(slotIndex, slotIndex))
                         {
@@ -2958,6 +2958,16 @@ namespace Client.Main.Controls.UI.Game.Inventory
             else if (_hoveredEquipSlot < 0 && OwnPlayerShopEditor != null)
             {
                 lines.Add(("Right-click or drag: add to personal shop", Theme.TextGold));
+            }
+            // Period items (D2 12): expiry kept by inventory slot.
+            byte tooltipSlot = (byte)(_hoveredEquipSlot >= 0
+                ? _hoveredEquipSlot
+                : InventorySlotOffsetConstant + _hoveredItem.GridPosition.Y * Columns + _hoveredItem.GridPosition.X);
+            if (_networkManager?.GetCharacterState()?.TryGetItemExpiration(tooltipSlot, out DateTime expiresAt) == true)
+            {
+                lines.Add(expiresAt <= DateTime.UtcNow
+                    ? ("Expired", Theme.Warning)
+                    : ($"Expires: {expiresAt.ToLocalTime():yyyy-MM-dd HH:mm}", Theme.Warning));
             }
             const float scale = 0.37f;
             const int lineSpacing = 3;

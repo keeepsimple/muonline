@@ -16,6 +16,7 @@ using Client.Main.Networking.PacketHandling.Handlers; // For CharacterClassNumbe
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Client.Main.Controls.UI.Game.Inventory;
+using Client.Main.Controls.UI.Game.Gens;
 using Client.Main.Controls.UI.Game.Guild;
 using Client.Main.Controls.UI.Game.Friends;
 using Client.Main.Controls.UI.Game.Map;
@@ -65,10 +66,13 @@ namespace Client.Main.Scenes
         internal OwnPlayerShopControl OwnPlayerShop { get; private set; }
         internal GuildInfoWindow GuildInfo { get; private set; }
         internal GuildCreateWindow GuildCreate { get; private set; }
+        internal GensWindow GensInfo { get; private set; }
+        internal Client.Main.Controls.UI.Game.CashShop.CashShopWindow CashShopWindow { get; private set; }
         internal FriendListWindow FriendList { get; private set; }
         internal LetterReadWindow LetterRead { get; private set; }
         internal LetterComposeWindow LetterCompose { get; private set; }
         internal MiniGameScoreWindow MiniGameScore { get; private set; }
+        internal GameSceneMuHelperController MuHelper { get; private set; }
         private Client.Main.Core.Client.GuildManager _guildManager;
         private Client.Main.Core.Client.FriendManager _friendManager;
         private Controls.UI.NotificationManager _notificationManager;
@@ -274,7 +278,15 @@ namespace Client.Main.Scenes
             Controls.Add(DevilSquareEnterControl.Instance);
             Controls.Add(BloodCastleEnterControl.Instance);
             Controls.Add(BloodCastleTimeControl.Instance);
+            Controls.Add(EventZoneHudControl.Instance);
+            Controls.Add(KanturuGatewayWindow.Instance);
             Controls.Add(BloodCastleResultControl.Instance);
+            Controls.Add(Client.Main.Controls.UI.Game.CastleSiege.CastleSiegeHud.Instance);
+            Controls.Add(Client.Main.Controls.UI.Game.CastleSiege.CastleSiegeWindow.Instance);
+            Controls.Add(Client.Main.Controls.UI.Game.CastleSiege.CastleSiegeSeniorWindow.Instance);
+            Controls.Add(Client.Main.Controls.UI.Game.CastleSiege.CastleSiegeMachineWindow.Instance);
+            Controls.Add(InstancedEventHud.Instance);
+            Controls.Add(InstancedEventResultWindow.Instance);
             PlayerShop = new PlayerShopControl();
             PlayerShop.ShopClosed += (ownerId, ownerName) =>
             {
@@ -334,6 +346,10 @@ namespace Client.Main.Scenes
             Controls.Add(GuildInfo);
             GuildCreate = new GuildCreateWindow();
             Controls.Add(GuildCreate);
+            GensInfo = new GensWindow(MuGame.Network.GetGensManager());
+            Controls.Add(GensInfo);
+            CashShopWindow = new Client.Main.Controls.UI.Game.CashShop.CashShopWindow(MuGame.Network.GetCashShopManager());
+            Controls.Add(CashShopWindow);
             var friendManager = MuGame.Network.GetFriendManager();
             FriendList = new FriendListWindow(friendManager);
             Controls.Add(FriendList);
@@ -344,6 +360,7 @@ namespace Client.Main.Scenes
             Controls.Add(new LetterNotifierControl(friendManager));
             MiniGameScore = new MiniGameScoreWindow();
             Controls.Add(MiniGameScore);
+            MuHelper = new GameSceneMuHelperController(this);
             _friendManager = friendManager;
             _friendManager.FriendRequestReceived += OnFriendRequestReceived;
             _friendManager.ChatRoomOpened += OnChatRoomOpened;
@@ -352,6 +369,7 @@ namespace Client.Main.Scenes
             _guildManager.GuildMasterDialogRequested += OnGuildMasterDialogRequested;
             _guildManager.GuildJoinRequestReceived += OnGuildJoinRequestReceived;
             _guildManager.GuildCreationDialogRequested += OnGuildCreationDialogRequested;
+            MuGame.Network.ConnectionStateChanged += OnConnectionStateChanged;
             _windowCloseController = new GameSceneWindowCloseController(_inventoryControl, _logger);
 
             _moveCommandWindow = new MoveCommandWindow(MuGame.AppLoggerFactory, MuGame.Network);
@@ -900,6 +918,7 @@ namespace Client.Main.Scenes
 
             long skillUpdateStarted = UpdatePassProfiler.Start();
             _skillController?.Update();
+            MuHelper?.Update(gameTime);
             UpdatePassProfiler.AddGameSkillUpdate(skillUpdateStarted);
 
             long attackInputStarted = UpdatePassProfiler.Start();
@@ -1437,6 +1456,29 @@ namespace Client.Main.Scenes
 
         private void OnGuildCreationDialogRequested() => GuildCreate?.Show();
 
+        /// <summary>
+        /// The game server connection dropped (kick, timeout, server down): the session state was already reset by
+        /// PacketRouter.OnDisconnected; tell the player and go back to the login scene, which reconnects.
+        /// </summary>
+        private void OnConnectionStateChanged(object sender, Client.Main.Core.Client.ClientConnectionState state)
+        {
+            if (state != Client.Main.Core.Client.ClientConnectionState.Disconnected
+                || MuGame.Network.IsLogoutDisconnect
+                || !ReferenceEquals(MuGame.Instance?.ActiveScene, this))
+                return;
+
+            _logger?.LogWarning("Connection lost while in game. Returning to the login scene.");
+            var message = MessageWindow.Show("Connection lost.");
+            if (message != null)
+                message.Closed += (_, _) => MuGame.ScheduleOnMainThread(() =>
+                {
+                    if (ReferenceEquals(MuGame.Instance.ActiveScene, this))
+                        MuGame.Instance.ChangeScene<LoginScene>();
+                });
+            else
+                MuGame.Instance.ChangeScene<LoginScene>();
+        }
+
         /// <summary>GuildJoinRequest (0x50): another player asks to join the own guild.</summary>
         private void OnGuildJoinRequestReceived(ushort requesterId, string requesterName)
         {
@@ -1509,6 +1551,8 @@ namespace Client.Main.Scenes
                 _friendManager.NewLetterReceived -= OnNewLetterReceived;
                 _friendManager.FriendCameOnline -= OnFriendCameOnline;
             }
+            if (MuGame.Network != null)
+                MuGame.Network.ConnectionStateChanged -= OnConnectionStateChanged;
             foreach (var room in _chatRooms.ToArray())
                 room.Hide();
             if (_guildManager != null)

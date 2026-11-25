@@ -318,6 +318,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
         [PacketHandler(0xBD, 0x00)] // CrywolfInfo (S2C)
         public Task HandleCrywolfInfoAsync(Memory<byte> packet)
         {
+            EventZoneHandler.ApplyCrywolfInfo(packet.Span);
             if (packet.Length < 6 || _characterState.MapId != 34)
                 return Task.CompletedTask;
 
@@ -366,6 +367,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
         [PacketHandler(0xD1, 0x00)] // KanturuStateInfo (S2C)
         public Task HandleKanturuStateInfoAsync(Memory<byte> packet)
         {
+            EventZoneHandler.ApplyKanturuStateInfo(packet.Span);
             if (packet.Length < 12)
                 return Task.CompletedTask;
 
@@ -394,6 +396,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
 
             byte state = packet.Span[4];
             byte detailState = packet.Span[5];
+            EventZoneHandler.ApplyKanturuStateChange(packet.Span);
             MuGame.ScheduleOnMainThread(() => ApplyKanturuMusic(state, detailState));
             return Task.CompletedTask;
         }
@@ -401,6 +404,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
         [PacketHandler(0xF7, 0x02)] // Empire Guardian enter response (S2C)
         public Task HandleEmpireGuardianEnterAsync(Memory<byte> packet)
         {
+            InstancedEventHandler.ApplyEmpireGuardianEnter(packet.Span);
             if (packet.Length < 12 || packet.Span[4] != 0 || packet.Span[7] > 3)
                 return Task.CompletedTask;
 
@@ -417,6 +421,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 return Task.CompletedTask;
 
             var span = packet.Span;
+            InstancedEventHandler.ApplyIllusionTempleState(span, _characterState.Id);
             int remainSec = span[4] | (span[5] << 8);
             int alliedPoint = span[10];
             int illusionPoint = span[11];
@@ -452,6 +457,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 return Task.CompletedTask;
 
             int mapId = _characterState.MapId;
+            InstancedEventHandler.ApplyIllusionTempleResult(packet.Span, _characterState.Name);
             MuGame.ScheduleOnMainThread(() =>
             {
                 if (_characterState.MapId == mapId)
@@ -468,6 +474,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
 
             int mapId = _characterState.MapId;
             byte state = packet.Span[5];
+            InstancedEventHandler.ApplyIllusionTemplePhase(state);
             MuGame.ScheduleOnMainThread(() =>
             {
                 if (_characterState.MapId != mapId)
@@ -1173,6 +1180,32 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             {
                 _logger.LogError(ex, "Error processing CreateCharacterResponse packet.");
             }
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// CharacterClassCreationUnlock (0xDE 00): UnlockFlags @4, sent after the character list. Stored only: the
+        /// creation screens already offer every class, and OpenMU checks CanGetCreated, not these flags.
+        /// </summary>
+        [PacketHandler(0xDE, 0x00)]
+        public Task HandleCharacterClassCreationUnlockAsync(Memory<byte> packet)
+        {
+            if (packet.Length < 5)
+            {
+                _logger.LogWarning("CharacterClassCreationUnlock packet too short.");
+                return Task.CompletedTask;
+            }
+            _characterState.CharacterCreationUnlockFlags = (CharacterCreationUnlockFlags)packet.Span[4];
+            _logger.LogInformation("Unlocked character classes: {Flags}", _characterState.CharacterCreationUnlockFlags);
+            return Task.CompletedTask;
+        }
+
+        /// <summary>CharacterFocused (0xF3 15): answer to FocusCharacter, which this client does not send; logged only.</summary>
+        [PacketHandler(0xF3, 0x15)]
+        public Task HandleCharacterFocusedAsync(Memory<byte> packet)
+        {
+            if (packet.Length >= 14)
+                _logger.LogDebug("Character focused: {Name}", PlayerShopListParser.ReadString(packet.Span.Slice(4, 10)));
             return Task.CompletedTask;
         }
 

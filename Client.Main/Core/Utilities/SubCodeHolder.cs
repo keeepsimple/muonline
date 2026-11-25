@@ -49,7 +49,11 @@ namespace Client.Main.Core.Utilities
             0xEB, // Alliance Kick Response - Guild alliance kick response packet
             0xF7, // Empire Guardian Enter Response - Empire Guardian event enter response
             0xF8, // Gens Join/Leave/Reward/Ranking Response - Gens system related responses
+            0xF5, // OpenMU extensions: chat commands, Discord, external chat, extended warp list, round trip
             0xBD, // Crywolf Info/Contract/Benefit - Crywolf Fortress event information and status packets
+            0xB2, // Castle Siege status/registration/taxes/gates/crown (C1 only; 0xB3-0xB6 and 0xBB are C2 lists without sub-code)
+            0xB7, // Castle Siege machine interface/use/impact
+            0xB9, // Castle Siege life stone/owner logo/hunting zone
         };
 
         /// <summary>

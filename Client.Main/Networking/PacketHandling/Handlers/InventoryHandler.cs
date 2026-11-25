@@ -518,7 +518,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                         _characterState.RaiseVaultItemsChanged();
                         _logger.LogInformation("Vault item moved to slot {To}.", toSlot);
                     }
-                    else if (targetStore == ItemStorageKind.ChaosMachine)
+                    else if (ChaosMixControl.IsMixStorage(targetStore))
                     {
                         // Clear any pending chaos machine move information (for chaos->chaos moves)
                         if (_characterState.TryConsumePendingChaosMachineMove(out var from, out var to))
@@ -637,6 +637,22 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             {
                 _logger.LogError(ex, "Error parsing ItemDurabilityChanged packet.");
             }
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// InventoryItemEquipResult (0xBF/0x20): InventorySlot @4, Result @5 = the item's new durability, which tells
+        /// whether an item used inside the inventory is in use.
+        /// </summary>
+        [PacketHandler(0xBF, 0x20)]
+        public Task HandleInventoryItemEquipResultAsync(Memory<byte> packet)
+        {
+            if (packet.Length < 6)
+            {
+                _logger.LogWarning("InventoryItemEquipResult packet too short: {Length}", packet.Length);
+                return Task.CompletedTask;
+            }
+            _characterState.UpdateItemDurability(packet.Span[4], packet.Span[5]);
             return Task.CompletedTask;
         }
 

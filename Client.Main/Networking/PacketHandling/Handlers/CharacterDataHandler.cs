@@ -1491,6 +1491,45 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             return Task.CompletedTask;
         }
 
+        /// <summary>RageAttack (0x4A): a rage fighter skill hit; SkillId @3, SourceId @5, TargetId @7 (big endian),
+        /// the same layout as SkillAnimation (0x19), so it plays through the same animation and effect path.</summary>
+        [PacketHandler(0x4A, PacketRouter.NoSubCode)]
+        public Task HandleRageAttackAsync(Memory<byte> packet)
+        {
+            if (packet.Length < 9)
+            {
+                _logger.LogWarning("RageAttack packet too short: {Length}", packet.Length);
+                return Task.CompletedTask;
+            }
+            return HandleSkillAnimationAsync(packet);
+        }
+
+        /// <summary>RageAttackRangeResponse (0x4B): targets of the own rage skill; SkillId @4 (LE), up to five
+        /// LE target ids from @6, 10000 = unused. Plays the own cast towards the first target like a SkillAnimation.</summary>
+        [PacketHandler(0x4B, PacketRouter.NoSubCode)]
+        public Task HandleRageAttackRangeAsync(Memory<byte> packet)
+        {
+            var span = packet.Span;
+            if (span.Length < 8)
+            {
+                _logger.LogWarning("RageAttackRangeResponse packet too short: {Length}", span.Length);
+                return Task.CompletedTask;
+            }
+
+            ushort skillId = BinaryPrimitives.ReadUInt16LittleEndian(span[4..]);
+            ushort targetId = BinaryPrimitives.ReadUInt16LittleEndian(span[6..]);
+            if (targetId == 10000)
+                return Task.CompletedTask; // no target in range
+
+            // ponytail: the visual goes to the first target only; the other targets get their hit reactions from 0x11.
+            var animation = new byte[9];
+            animation[0] = 0xC1; animation[1] = 9; animation[2] = 0x19;
+            BinaryPrimitives.WriteUInt16BigEndian(animation.AsSpan(3), skillId);
+            BinaryPrimitives.WriteUInt16BigEndian(animation.AsSpan(5), _characterState.Id);
+            BinaryPrimitives.WriteUInt16BigEndian(animation.AsSpan(7), targetId);
+            return HandleSkillAnimationAsync(animation);
+        }
+
         [PacketHandler(0x1E, PacketRouter.NoSubCode)] // AreaSkillAnimation
         public Task HandleAreaSkillAnimationAsync(Memory<byte> packet)
         {

@@ -118,6 +118,25 @@ namespace Client.Main.Core.Utilities.ItemTooltip
             return GlobalText.Format("%s(%s %s)", GlobalText.Get(2640 + pInfo.m_iOptionCategory - 1), pInfo.m_szOptionName, value);
         }
 
+        public const int SOCKET_NONE = 0xFF; // OpenMU ItemSerializerHelper.NoSocket
+
+        /// <summary>
+        /// Socket bytes of extended item data (after the socket info byte). OpenMU (ItemSerializerHelper.SetSocketBytes)
+        /// writes 0xFE for an empty socket, otherwise (sphere level - 1) * MAX_SOCKET_OPTION + seed option index.
+        /// </summary>
+        public static byte[] GetSocketBytes(byte[] raw)
+        {
+            if (raw == null || !ItemDataParser.TryParseExtendedItemData(raw, out var ext) || ext.Length > raw.Length)
+                return Array.Empty<byte>();
+            return raw.AsSpan(ext.Length - ext.SocketCount, ext.SocketCount).ToArray();
+        }
+
+        /// <summary>Tooltip text of one socket byte: seed sphere option with its value, or the empty-socket text.</summary>
+        public static string DescribeSocket(byte option)
+            => option == SOCKET_EMPTY ? GlobalText.Get(2652)
+             : option == SOCKET_NONE ? string.Empty
+             : CreateSocketOptionText(option % MAX_SOCKET_OPTION, option / MAX_SOCKET_OPTION + 1);
+
         // CSocketItemMgr::GetSocketOptionValue (SocketSystem.cpp:466)
         public static int GetSocketOptionValue(SourceItem pItem, int iSocketIndex)
         {

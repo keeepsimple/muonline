@@ -1,11 +1,13 @@
 // Offline check of the SourceMain5.2 RenderItemInfo port: builds tooltips for sample items and prints them.
 using Client.Main.Controls.UI.Game.Common;
 using Client.Main.Core.Client;
+using Client.Main.Core.Client.CashShop;
 using Client.Main.Core.Utilities;
 using Client.Main.Core.Utilities.ItemTooltip;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Xna.Framework;
 using MUnique.OpenMU.Network.Packets;
+using MUnique.OpenMU.Network.Packets.ServerToClient;
 
 int failures = 0;
 void Check(bool ok, string name) { if (!ok) failures++; Console.WriteLine($"[{(ok ? "PASS" : "FAIL")}] {name}"); }
@@ -17,7 +19,7 @@ var state = new CharacterState(NullLoggerFactory.Instance)
 };
 
 // Extended item data (OpenMU): group/number, level, durability, flags, [option], [excellent], [ancient], [harmony]
-byte[] Item(int group, int number, int level, int dur, bool luck = false, bool skill = false, int option = 0, int exc = 0, int ancient = 0, byte[] sockets = null, int socketBonus = 0x0F)
+byte[] Item(int group, int number, int level, int dur, bool luck = false, bool skill = false, int option = 0, int exc = 0, int ancient = 0, byte[] sockets = null, int socketBonus = 0x0F, int harmony = 0)
 {
     byte flags = 0;
     var tail = new List<byte>();
@@ -26,6 +28,7 @@ byte[] Item(int group, int number, int level, int dur, bool luck = false, bool s
     if (skill) flags |= 0x04;
     if (exc > 0) { flags |= 0x08; tail.Add((byte)exc); }
     if (ancient > 0) { flags |= 0x10; tail.Add((byte)ancient); }
+    if (harmony > 0) { flags |= 0x20; tail.Add((byte)harmony); }
     if (sockets != null) { flags |= 0x80; tail.Add((byte)((socketBonus << 4) | sockets.Length)); tail.AddRange(sockets); }
     var data = new List<byte> { (byte)((group << 4) | ((number >> 8) & 0x0F)), (byte)(number & 0xFF), (byte)level, (byte)dur, flags };
     data.AddRange(tail);
@@ -94,6 +97,47 @@ Check(raven.Any(l => l.text == GlobalText.Get(1214)), "pet tooltip header");
 
 var ancStyled = ItemUiHelper.BuildTooltipLines(new InventoryItem(ItemDatabase.GetItemDefinition(Item(7, 3, 6, 40, ancient: 0x11)), Point.Zero, Item(7, 3, 6, 40, ancient: 0x11), 40), new ItemTooltipContext { Character = state });
 Check(ancStyled.GetStyle(0).Background.HasValue && ancStyled.GetStyle(0).Bold, "ancient name row: bold with GREEN_BLUE background");
+
+// Socket bytes as OpenMU encodes them (ItemSerializerHelper.SetSocketBytes): (sphere level - 1) * 50 + offset[element] + option,
+// offsets { 0, 10, 16, 21, 29, 36 }; e.g. Ice (element 2) option 2 "skill damage" 37/40/45/50/60 at sphere level 3 = 118.
+byte iceSkillLv3 = 2 * 50 + 16 + 2;
+var socketRaw = Item(0, 26, 0, 50, sockets: new byte[] { 0xFE, iceSkillLv3 }, socketBonus: 0);
+Check(SourceSocketItems.GetSocketBytes(socketRaw).SequenceEqual(new byte[] { 0xFE, iceSkillLv3 }), "socket bytes follow the socket info byte");
+Check(SourceSocketItems.DescribeSocket(iceSkillLv3) == SourceSocketItems.CreateSocketOptionText(18, 3), "socket byte -> seed 18, sphere level 3");
+Check(SourceSocketItems.DescribeSocket(iceSkillLv3).EndsWith("+45)"), "ice skill damage sphere level 3 = +45 (server value)");
+Check(SourceSocketItems.DescribeSocket(0xFE) == GlobalText.Get(2652), "empty socket text");
+var sock2 = Show("Socket item: empty socket + Ice sphere lv3, bonus option 0", socketRaw);
+Check(sock2.Any(l => l.text.Contains(SourceSocketItems.DescribeSocket(iceSkillLv3))), "socket 2 row shows the ice sphere");
+Check(sock2.Any(l => l.text == GlobalText.Get(2656)), "socket bonus option header");
+
+// Harmony byte as OpenMU encodes it (ItemSerializerHelper.GetHarmonyByte): (option number << 4) | level.
+string harmonyText = JewelHarmonyInfo.Instance.DescribeOption(0 * 512 + 5, 1, 5);
+var harmonyItem = Show("Harmony option 1 level 5 on a sword +9", Item(0, 5, 9, 50, harmony: (1 << 4) | 5));
+Check(harmonyText != null && harmonyItem.Any(l => l.text == harmonyText), $"harmony option row ({harmonyText})");
+
+// Crafting NPC windows: mix.bmd recipe ids must be the OpenMU crafting numbers the server looks up.
+int[] MixIds(NpcWindowResponse.NpcWindow window)
+    => MixRecipeDatabase.GetRecipes(Client.Main.Controls.UI.Game.ChaosMixControl.MixWindows[window].Groups).Select(r => r.MixId).Distinct().OrderBy(i => i).ToArray();
+Check(MixIds(NpcWindowResponse.NpcWindow.SeedMaster).SequenceEqual(new[] { 42, 43 }), "seed master: extraction 42, sphere 43");
+Check(MixIds(NpcWindowResponse.NpcWindow.SeedResearcher).SequenceEqual(new[] { 44, 45 }), "seed researcher: mount 44, remove 45");
+Check(MixIds(NpcWindowResponse.NpcWindow.ElphisRefinery).SequenceEqual(new[] { 33 }), "elphis: gemstone refinery 33");
+Check(MixIds(NpcWindowResponse.NpcWindow.RefineStoneMaking).SequenceEqual(new[] { 34 }), "osbourne: refine stone 34");
+Check(MixIds(NpcWindowResponse.NpcWindow.RemoveJohOption).SequenceEqual(new[] { 35 }), "jerridon: restore item 35");
+
+// Cash shop script parsing (MuMain ShopPackage / ShopProduct field order).
+var catalog = CashShopCatalog.Parse(
+    new[] { "5@Jewels@0@1@0@1@0", "6@Empty@0@1@0@2@0" },
+    new[]
+    {
+        "5@1@258@Vault Expansion Certificate@0@2490@desc@caution@182@185@2010-01-01@2020-01-01@0@0@cash@unit@0@0@1@282|@7331@0@1@350|@0@508@0",
+        "5@2@162@Gladiator Package@0@500@desc@caution@182@184@2010-01-01@2020-01-01@0@0@cash@unit@0@0@1@115|116|@0@0@0@@0@509@0",
+    },
+    new[] { "282@Vault Expansion Certificate@prop@1@EA@2490@350@0@0@0@0@0@0@7331@7@0@0" });
+var vault = catalog.Packages.FirstOrDefault(p => p.Seq == 258);
+Check(catalog.Categories.Count == 1 && catalog.GetPackages(5).Count() == 2, "catalog categories with packages");
+Check(vault != null && vault.IsForSale && !vault.IsGiftable && vault.PriceSeqs.SequenceEqual(new[] { 350 }) && vault.CashType == 508, "catalog package fields");
+Check(catalog.Packages.Single(p => p.Seq == 162).IsBundle, "bundle has no price options");
+Check(catalog.DescribePriceOption(350) == "2490 - 1 EA" && catalog.GetProductName(282) == "Vault Expansion Certificate", "catalog product lines");
 
 Console.WriteLine(failures == 0 ? "All item tooltip checks passed." : $"{failures} check(s) failed.");
 return failures == 0 ? 0 : 1;

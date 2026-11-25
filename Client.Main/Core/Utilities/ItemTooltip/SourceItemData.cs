@@ -289,6 +289,19 @@ namespace Client.Main.Core.Utilities.ItemTooltip
             return m_OptionData[(int)type, index];
         }
 
+        /// <summary>
+        /// Harmony option text like the tooltip shows it ("name +value", RenderItemInfo), null if the option is unknown
+        /// for the item. OpenMU sends the option as (number &lt;&lt; 4) | level (ItemSerializerHelper.GetHarmonyByte).
+        /// </summary>
+        public string DescribeOption(int itemType, int option, int level)
+        {
+            var type = GetItemType(itemType);
+            if (option == 0 || type >= StrengthenItem.SI_None || !IsHarmonyJewelOption(type, option)) return null;
+            var h = GetHarmonyJewelOptionInfo(type, option);
+            string percent = type == StrengthenItem.SI_Defense && option == 7 ? "%" : string.Empty;
+            return $"{h.Name} +{LevelValue(h, level)}{percent}";
+        }
+
         private static int LevelValue(HarmonyJewelOption h, int level) => level >= 0 && level < h.HarmonyJewelLevel.Length ? h.HarmonyJewelLevel[level] : 0;
 
         /// <summary>JewelHarmonyInfo::GetStrengthenCapability (UIJewelHarmony.cpp:203).</summary>

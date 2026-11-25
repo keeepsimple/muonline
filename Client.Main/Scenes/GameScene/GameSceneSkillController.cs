@@ -766,6 +766,10 @@ namespace Client.Main.Scenes
             return target != null && UseSkillOnTarget(skill, target);
         }
 
+        /// <summary>Casts a support skill (heal, buffs, Soul Barrier) on another player, e.g. for the MU Helper.</summary>
+        internal bool CastSkillOnPlayer(Core.Client.SkillEntryState skill, PlayerObject target) =>
+            UseSkillOnPlayerTarget(skill, target);
+
         private bool UseSelfSkill(Core.Client.SkillEntryState skill, PlayerObject hero)
         {
             if (skill == null || hero == null || hero.IsDead)

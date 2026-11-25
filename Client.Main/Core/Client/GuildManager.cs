@@ -22,6 +22,9 @@ namespace Client.Main.Core.Client
         public bool IsOnline => ServerId != 0xFF;
     }
 
+    /// <summary>One guild of the own alliance (0xE9 AllianceList entry).</summary>
+    public sealed record AllianceGuildInfo(string Name, byte MemberCount, byte[] Mark);
+
     /// <summary>
     /// Cached guild data (0x66 GuildInformation), equivalent to the original <c>MARK_t</c> entries of <c>GuildCache</c>.
     /// </summary>
@@ -218,12 +221,82 @@ namespace Client.Main.Core.Client
             GuildMemberListUpdated?.Invoke();
         }
 
+        // ─────────────────────────── Guild war / battle soccer (0x60-0x64, 0xF3 0x22/0x23) ───────────────────────────
+
+        /// <summary>Enemy guild of the running war, empty when there is none (0x62 / 0x63).</summary>
+        public string WarEnemyGuild { get; private set; } = string.Empty;
+        public bool IsInWar => WarEnemyGuild.Length > 0;
+        public GuildWarType WarType { get; private set; }
+        public byte WarTeam { get; private set; }
+        public byte WarOwnScore { get; private set; }
+        public byte WarEnemyScore { get; private set; }
+
+        /// <summary>Guild that asked the own guild master for a war (0x61), empty once answered.</summary>
+        public string PendingWarRequestGuild { get; set; } = string.Empty;
+        public GuildWarType PendingWarRequestType { get; set; }
+
+        public void StartWar(string enemyGuild, GuildWarType type, byte team)
+        {
+            WarEnemyGuild = enemyGuild ?? string.Empty;
+            WarType = type;
+            WarTeam = team;
+            WarOwnScore = WarEnemyScore = 0;
+        }
+
+        public void UpdateWarScore(byte own, byte enemy)
+        {
+            WarOwnScore = own;
+            WarEnemyScore = enemy;
+        }
+
+        public void EndWar()
+        {
+            WarEnemyGuild = string.Empty;
+            WarOwnScore = WarEnemyScore = 0;
+        }
+
+        /// <summary>Battle soccer scoreboard; OpenMU hides it with RedTeamGoals = 255.</summary>
+        public bool SoccerScoreVisible { get; private set; }
+        public string SoccerRedTeam { get; private set; } = string.Empty;
+        public string SoccerBlueTeam { get; private set; } = string.Empty;
+        public byte SoccerRedGoals { get; private set; }
+        public byte SoccerBlueGoals { get; private set; }
+        public int SoccerRemainingSeconds { get; set; }
+
+        public void UpdateSoccerScore(string red, byte redGoals, string blue, byte blueGoals)
+        {
+            SoccerScoreVisible = redGoals != byte.MaxValue;
+            SoccerRedTeam = SoccerScoreVisible ? red ?? string.Empty : string.Empty;
+            SoccerBlueTeam = SoccerScoreVisible ? blue ?? string.Empty : string.Empty;
+            SoccerRedGoals = SoccerScoreVisible ? redGoals : (byte)0;
+            SoccerBlueGoals = SoccerScoreVisible ? blueGoals : (byte)0;
+            if (!SoccerScoreVisible)
+                SoccerRemainingSeconds = 0;
+        }
+
+        // ─────────────────────────── Alliance / hostility (0xE5, 0xE6, 0xE9) ───────────────────────────
+
+        /// <summary>Incoming relationship request (0xE5) waiting for the guild master's answer.</summary>
+        public (byte RelationshipType, byte RequestType, ushort SenderId)? PendingRelationshipRequest { get; set; }
+
+        private List<AllianceGuildInfo> _allianceGuilds = new();
+
+        /// <summary>Guilds of the own alliance from the last AllianceList (0xE9).</summary>
+        public IReadOnlyList<AllianceGuildInfo> AllianceGuilds => _allianceGuilds;
+
+        public void UpdateAllianceList(List<AllianceGuildInfo> guilds) => _allianceGuilds = guilds;
+
         /// <summary>Drops everything tied to the current session (disconnect / character change).</summary>
         public void Reset()
         {
             _players.Clear();
             _requestedGuilds.Clear();
             ClearOwnGuild();
+            EndWar();
+            PendingWarRequestGuild = string.Empty;
+            PendingRelationshipRequest = null;
+            UpdateSoccerScore(string.Empty, byte.MaxValue, string.Empty, 0);
+            _allianceGuilds = new();
         }
 
         internal void RaiseGuildMasterDialog() => GuildMasterDialogRequested?.Invoke();

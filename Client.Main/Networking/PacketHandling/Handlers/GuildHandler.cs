@@ -271,6 +271,396 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             return Task.CompletedTask;
         }
 
+        // ─────────────────────────── Guild war / battle soccer ───────────────────────────
+
+        /// <summary>GuildWarRequestResult (0x60): result of the own /war or /battlesoccer request.</summary>
+        [PacketHandler(0x60, PacketRouter.NoSubCode)]
+        public Task HandleGuildWarRequestResultAsync(Memory<byte> packet)
+        {
+            try
+            {
+                if (packet.Length < GuildWarRequestResult.Length)
+                {
+                    _logger.LogWarning("GuildWarRequestResult packet too short: {Length}", packet.Length);
+                    return Task.CompletedTask;
+                }
+
+                var result = new GuildWarRequestResult(packet).Result;
+                ShowSystemMessage(result switch
+                {
+                    GuildWarRequestResult.RequestResult.GuildNotFound => "That guild does not exist.",
+                    GuildWarRequestResult.RequestResult.RequestSentToGuildMaster => "The request has been sent. Waiting for the guild master's answer.",
+                    GuildWarRequestResult.RequestResult.GuildMasterOffline => "The guild master of that guild is not connected.",
+                    GuildWarRequestResult.RequestResult.NotInGuild => "You are not in a guild.",
+                    GuildWarRequestResult.RequestResult.NotTheGuildMaster => "Only the guild master can declare a guild war.",
+                    GuildWarRequestResult.RequestResult.AlreadyInWar => "That guild is already at war.",
+                    _ => "The guild war could not be started.",
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error parsing GuildWarRequestResult (0x60).");
+            }
+
+            return Task.CompletedTask;
+        }
+
+        /// <summary>GuildWarRequest (0x61): another guild master asks the own guild master for a war or battle soccer.</summary>
+        [PacketHandler(0x61, PacketRouter.NoSubCode)]
+        public Task HandleGuildWarRequestAsync(Memory<byte> packet)
+        {
+            try
+            {
+                if (packet.Length < GuildWarRequest.Length)
+                {
+                    _logger.LogWarning("GuildWarRequest packet too short: {Length}", packet.Length);
+                    return Task.CompletedTask;
+                }
+
+                var request = new GuildWarRequest(packet);
+                string guildName = request.GuildName;
+                var type = request.Type;
+                Guilds.PendingWarRequestGuild = guildName;
+                Guilds.PendingWarRequestType = type;
+
+                void Answer(bool accepted)
+                {
+                    Guilds.PendingWarRequestGuild = string.Empty;
+                    _ = _characterService.SendGuildWarResponseAsync(accepted);
+                }
+
+                MuGame.ScheduleOnMainThread(() => RequestDialog.Show(
+                    type == GuildWarType.Soccer
+                        ? $"The guild {guildName} challenges your guild to a battle soccer match."
+                        : $"The guild {guildName} declares war on your guild.",
+                    onAccept: () => Answer(true),
+                    onReject: () => Answer(false)));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error parsing GuildWarRequest (0x61).");
+            }
+
+            return Task.CompletedTask;
+        }
+
+        /// <summary>GuildWarDeclared (0x62): the war started, sent to all members of both guilds.</summary>
+        [PacketHandler(0x62, PacketRouter.NoSubCode)]
+        public Task HandleGuildWarDeclaredAsync(Memory<byte> packet)
+        {
+            try
+            {
+                if (packet.Length < GuildWarDeclared.Length)
+                {
+                    _logger.LogWarning("GuildWarDeclared packet too short: {Length}", packet.Length);
+                    return Task.CompletedTask;
+                }
+
+                var declared = new GuildWarDeclared(packet);
+                string guildName = declared.GuildName;
+                Guilds.StartWar(guildName, declared.Type, declared.TeamCode);
+                ShowSystemMessage(declared.Type == GuildWarType.Soccer
+                    ? $"Battle soccer against {guildName} has begun."
+                    : $"The guild war against {guildName} has begun.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error parsing GuildWarDeclared (0x62).");
+            }
+
+            return Task.CompletedTask;
+        }
+
+        /// <summary>GuildWarEnded (0x63).</summary>
+        [PacketHandler(0x63, PacketRouter.NoSubCode)]
+        public Task HandleGuildWarEndedAsync(Memory<byte> packet)
+        {
+            try
+            {
+                if (packet.Length < GuildWarEnded.Length)
+                {
+                    _logger.LogWarning("GuildWarEnded packet too short: {Length}", packet.Length);
+                    return Task.CompletedTask;
+                }
+
+                var ended = new GuildWarEnded(packet);
+                string guildName = ended.GuildName;
+                Guilds.EndWar();
+                ShowSystemMessage(ended.Result switch
+                {
+                    GuildWarEnded.GuildWarResult.Won => $"Your guild won the war against {guildName}!",
+                    GuildWarEnded.GuildWarResult.Lost => $"Your guild lost the war against {guildName}.",
+                    GuildWarEnded.GuildWarResult.OtherGuildMasterCancelledWar => $"The guild master of {guildName} cancelled the war.",
+                    GuildWarEnded.GuildWarResult.CancelledWar => $"The war against {guildName} was cancelled.",
+                    _ => $"The war against {guildName} has ended.",
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error parsing GuildWarEnded (0x63).");
+            }
+
+            return Task.CompletedTask;
+        }
+
+        /// <summary>GuildWarScoreUpdate (0x64): sent at the start and on every score change.</summary>
+        [PacketHandler(0x64, PacketRouter.NoSubCode)]
+        public Task HandleGuildWarScoreUpdateAsync(Memory<byte> packet)
+        {
+            try
+            {
+                if (packet.Length < GuildWarScoreUpdate.Length)
+                {
+                    _logger.LogWarning("GuildWarScoreUpdate packet too short: {Length}", packet.Length);
+                    return Task.CompletedTask;
+                }
+
+                var score = new GuildWarScoreUpdate(packet);
+                byte own = score.ScoreOfOwnGuild, enemy = score.ScoreOfEnemyGuild;
+                bool changed = own != Guilds.WarOwnScore || enemy != Guilds.WarEnemyScore;
+                Guilds.UpdateWarScore(own, enemy);
+                if (changed) // the initial 0:0 already came with the declaration message
+                    ShowSystemMessage($"Guild war score: {Guilds.OwnGuild?.Name ?? "Your guild"} {own} : {enemy} {Guilds.WarEnemyGuild}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error parsing GuildWarScoreUpdate (0x64).");
+            }
+
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// GuildSoccerTimeUpdate (0xF3 0x22): remaining seconds, every second of a match. Parsed by hand: OpenMU sends
+        /// 8 bytes with the seconds at offset 6, the 0.9.8 struct expects them at offset 4.
+        /// </summary>
+        [PacketHandler(0xF3, 0x22)]
+        public Task HandleGuildSoccerTimeUpdateAsync(Memory<byte> packet)
+        {
+            try
+            {
+                if (packet.Length < 8)
+                {
+                    _logger.LogWarning("GuildSoccerTimeUpdate packet too short: {Length}", packet.Length);
+                    return Task.CompletedTask;
+                }
+
+                int seconds = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(packet.Span[6..]);
+                Guilds.SoccerRemainingSeconds = seconds;
+                // ponytail: chat line per full minute / last 10 seconds; a scoreboard HUD can read GuildManager.Soccer*.
+                if (seconds > 0 && (seconds % 60 == 0 || seconds <= 10))
+                    ShowSystemMessage(seconds >= 60 ? $"Battle soccer: {seconds / 60} minute(s) left." : $"Battle soccer: {seconds} second(s) left.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error parsing GuildSoccerTimeUpdate (0xF3 0x22).");
+            }
+
+            return Task.CompletedTask;
+        }
+
+        /// <summary>GuildSoccerScoreUpdate (0xF3 0x23): at the start and on every goal; RedTeamGoals = 255 hides the board.</summary>
+        [PacketHandler(0xF3, 0x23)]
+        public Task HandleGuildSoccerScoreUpdateAsync(Memory<byte> packet)
+        {
+            try
+            {
+                if (packet.Length < GuildSoccerScoreUpdate.Length)
+                {
+                    _logger.LogWarning("GuildSoccerScoreUpdate packet too short: {Length}", packet.Length);
+                    return Task.CompletedTask;
+                }
+
+                var score = new GuildSoccerScoreUpdate(packet);
+                Guilds.UpdateSoccerScore(score.RedTeamName, score.RedTeamGoals, score.BlueTeamName, score.BlueTeamGoals);
+                if (Guilds.SoccerScoreVisible)
+                    ShowSystemMessage($"Battle soccer: {Guilds.SoccerRedTeam} {Guilds.SoccerRedGoals} : {Guilds.SoccerBlueGoals} {Guilds.SoccerBlueTeam}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error parsing GuildSoccerScoreUpdate (0xF3 0x23).");
+            }
+
+            return Task.CompletedTask;
+        }
+
+        // ─────────────────────────── Alliance / hostility ───────────────────────────
+        // The 0.9.8 packet package has no structs for these server packets; layouts follow OpenMU ServerToClientPackets.xml.
+
+        private const byte RelationshipAlliance = 1;
+        private const byte RelationshipHostility = 2;
+        private const byte RequestJoin = 1;
+        private const int AllianceGuildEntrySize = 41;
+
+        /// <summary>GuildRelationshipRequest (0xE5): another guild master asks for an alliance / hostility change.</summary>
+        [PacketHandler(0xE5, PacketRouter.NoSubCode)]
+        public Task HandleGuildRelationshipRequestAsync(Memory<byte> packet)
+        {
+            try
+            {
+                if (packet.Length < 7)
+                {
+                    _logger.LogWarning("GuildRelationshipRequest packet too short: {Length}", packet.Length);
+                    return Task.CompletedTask;
+                }
+
+                var span = packet.Span;
+                byte relationship = span[3], request = span[4];
+                ushort senderId = System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(span[5..]);
+                Guilds.PendingRelationshipRequest = (relationship, request, senderId);
+
+                string who = _networkManager.GetScopeManager().TryGetScopeObjectName(senderId, out var name) ? name : "A guild master";
+                string guild = Guilds.GetPlayerGuildName((ushort)(senderId & 0x7FFF));
+                if (guild.Length > 0)
+                    who += $" ({guild})";
+                string text = (relationship, request == RequestJoin) switch
+                {
+                    (RelationshipAlliance, true) => $"{who} wants to form an alliance with your guild.",
+                    (RelationshipAlliance, false) => $"{who} wants to leave the alliance.",
+                    (RelationshipHostility, true) => $"{who} wants to declare hostility against your guild.",
+                    _ => $"{who} wants to end the hostility with your guild.",
+                };
+
+                void Answer(bool accepted)
+                {
+                    Guilds.PendingRelationshipRequest = null;
+                    _ = _characterService.SendGuildRelationshipChangeResponseAsync(relationship, request, accepted, senderId);
+                }
+
+                MuGame.ScheduleOnMainThread(() => RequestDialog.Show(text, onAccept: () => Answer(true), onReject: () => Answer(false)));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error parsing GuildRelationshipRequest (0xE5).");
+            }
+
+            return Task.CompletedTask;
+        }
+
+        /// <summary>GuildRelationshipChangeResult (0xE6): sent to requester and responder.</summary>
+        [PacketHandler(0xE6, PacketRouter.NoSubCode)]
+        public Task HandleGuildRelationshipChangeResultAsync(Memory<byte> packet)
+        {
+            try
+            {
+                if (packet.Length < 8)
+                {
+                    _logger.LogWarning("GuildRelationshipChangeResult packet too short: {Length}", packet.Length);
+                    return Task.CompletedTask;
+                }
+
+                var span = packet.Span;
+                byte relationship = span[3], request = span[4], result = span[5];
+                bool alliance = relationship == RelationshipAlliance, join = request == RequestJoin;
+                ShowSystemMessage(result switch
+                {
+                    1 => (alliance, join) switch
+                    {
+                        (true, true) => "The guild alliance has been formed.",
+                        (true, false) => "The guild has left the alliance.",
+                        (false, true) => "Hostility has been declared.",
+                        _ => "The hostility has ended.",
+                    },
+                    16 => "The guild does not exist, or alliances are restricted during the Castle Siege.",
+                    17 => "You have no authorization to do that.",
+                    21 => "That guild is already in an alliance.",
+                    22 => "That guild is already hostile.",
+                    23 => "Your guild is already in an alliance.",
+                    24 => "Your guild already has a hostile guild.",
+                    25 => "The guild alliance does not exist.",
+                    26 => "The hostile guild does not exist.",
+                    27 => "Only the alliance master can do that.",
+                    28 => "That guild is not a rival guild.",
+                    29 => "The requirements to create an alliance are not met.",
+                    30 => "The alliance has reached the maximum number of guilds.",
+                    32 => "The request has been declined.",
+                    161 => "The alliance master is not in a Gens.",
+                    162 => "The guild master is not in a Gens.",
+                    163 => "The alliance master and guild master belong to different Gens.",
+                    _ => "The guild relationship could not be changed.",
+                });
+
+                // Alliance name (0x66) and rival guild (0x52) of the own guild changed.
+                if (result == 1 && Guilds.HasGuild)
+                {
+                    _ = _characterService.SendGuildInfoRequestAsync(Guilds.OwnGuildId);
+                    _ = _characterService.SendGuildListRequestAsync();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error parsing GuildRelationshipChangeResult (0xE6).");
+            }
+
+            return Task.CompletedTask;
+        }
+
+        /// <summary>AllianceList (0xE9, C2): guilds of the own alliance, answer to RequestAllianceList.</summary>
+        [PacketHandler(0xE9, PacketRouter.NoSubCode)]
+        public Task HandleAllianceListAsync(Memory<byte> packet)
+        {
+            try
+            {
+                if (packet.Length < 8)
+                {
+                    _logger.LogWarning("AllianceList packet too short: {Length}", packet.Length);
+                    return Task.CompletedTask;
+                }
+
+                var span = packet.Span;
+                int count = Math.Min(span[4], (packet.Length - 8) / AllianceGuildEntrySize);
+                var guilds = new List<AllianceGuildInfo>(count);
+                for (int i = 0; i < count; i++)
+                {
+                    var entry = span.Slice(8 + i * AllianceGuildEntrySize, AllianceGuildEntrySize);
+                    guilds.Add(new AllianceGuildInfo(ReadName(entry[33..41]), entry[0], GuildInfo.UnpackMark(entry[1..33])));
+                }
+
+                Guilds.UpdateAllianceList(guilds);
+                // ponytail: no alliance window yet (GuildInfoWindow alliance tab is a placeholder); list goes to chat.
+                ShowSystemMessage(guilds.Count == 0
+                    ? "Your guild is not part of an alliance."
+                    : "Alliance: " + string.Join(", ", guilds.ConvertAll(g => $"{g.Name} ({g.MemberCount})")));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error parsing AllianceList (0xE9).");
+            }
+
+            return Task.CompletedTask;
+        }
+
+        /// <summary>RemoveAllianceGuildResult (0xEB 0x01): result of kicking a guild from the alliance / leaving it.</summary>
+        [PacketHandler(0xEB, 0x01)]
+        public Task HandleRemoveAllianceGuildResultAsync(Memory<byte> packet)
+        {
+            try
+            {
+                if (packet.Length < 7)
+                {
+                    _logger.LogWarning("RemoveAllianceGuildResult packet too short: {Length}", packet.Length);
+                    return Task.CompletedTask;
+                }
+
+                bool success = packet.Span[4] != 0;
+                ShowSystemMessage(success ? "The guild has been removed from the alliance." : "The guild could not be removed from the alliance.");
+                if (success && Guilds.HasGuild)
+                    _ = _characterService.SendGuildInfoRequestAsync(Guilds.OwnGuildId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error parsing RemoveAllianceGuildResult (0xEB 0x01).");
+            }
+
+            return Task.CompletedTask;
+        }
+
+        private static string ReadName(ReadOnlySpan<byte> field)
+        {
+            int end = field.IndexOf((byte)0);
+            return System.Text.Encoding.UTF8.GetString(end < 0 ? field : field[..end]);
+        }
+
         private static void ShowSystemMessage(string text)
         {
             MuGame.ScheduleOnMainThread(() =>

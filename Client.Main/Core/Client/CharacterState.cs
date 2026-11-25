@@ -209,6 +209,49 @@ namespace Client.Main.Core.Client
         public event Action VaultItemsChanged;
         public event Action ChaosMachineItemsChanged;
 
+        /// <summary>ItemCraftingPreviewExtended (0x88): mix number (0 = no match), success rate and zen price (without tax)
+        /// the server calculated for the current mix box; null until the server sends one.</summary>
+        public (byte MixType, byte SuccessRate, uint Price)? ChaosMachineCraftingPreview { get; private set; }
+
+        public void SetChaosMachineCraftingPreview(byte mixType, byte successRate, uint price)
+        {
+            ChaosMachineCraftingPreview = (mixType, successRate, price);
+            ChaosMachineItemsChanged?.Invoke();
+        }
+
+        // Period (time limited) items, D2 11 / D2 12: expiry per inventory slot. The server resends it after a move,
+        // the old slot is dropped by RemoveInventoryItem / ClearInventory.
+        private readonly ConcurrentDictionary<byte, DateTime> _itemExpirations = new();
+        public void ClearItemExpirations() => _itemExpirations.Clear();
+        public void SetItemExpiration(byte slot, DateTime expiresAtUtc) => _itemExpirations[slot] = expiresAtUtc;
+        public bool TryGetItemExpiration(byte slot, out DateTime expiresAtUtc) => _itemExpirations.TryGetValue(slot, out expiresAtUtc);
+
+        /// <summary>PlayerShopPriceTypesExtended (0x3F 0A): PriceItemType values the server accepts besides zen
+        /// (item group &lt;&lt; 12 | number, or 0xFFF0..0xFFF2 for WCoin C / WCoin P / Goblin Points).</summary>
+        public IReadOnlyList<ushort> PlayerShopPriceTypes { get; set; } = Array.Empty<ushort>();
+
+        /// <summary>CharacterClassCreationUnlock (0xDE 00): classes the account has unlocked.</summary>
+        public CharacterCreationUnlockFlags CharacterCreationUnlockFlags { get; set; }
+
+        // OpenMU extensions (0xF5).
+        public sealed record ChatCommandInfo(string Command, string Name, string Description, byte MinimumStatus);
+        public sealed record DiscordIntegrationInfo(bool IsAccountLinked, bool IsGuildChatBridged, bool IsAllianceChatBridged,
+            bool IsWorldChatBridged, string InviteUrl, string LinkedUserName);
+
+        private ChatCommandInfo[] _availableChatCommands = Array.Empty<ChatCommandInfo>();
+
+        /// <summary>AvailableChatCommand (0xF5 01): the chat commands the player may use; index 0 starts a new list.</summary>
+        public IReadOnlyList<ChatCommandInfo> AvailableChatCommands => _availableChatCommands;
+
+        public void AddAvailableChatCommand(byte index, ChatCommandInfo command)
+            => _availableChatCommands = (index == 0 ? Array.Empty<ChatCommandInfo>() : _availableChatCommands).Append(command).ToArray();
+
+        /// <summary>DiscordIntegrationInfo (0xF5 03), null until the server sends it.</summary>
+        public DiscordIntegrationInfo DiscordIntegration { get; set; }
+
+        /// <summary>RoundTripResponse (0xF5 0D): last measured round trip in milliseconds.</summary>
+        public int? LastRoundTripMilliseconds { get; set; }
+
         // Legacy quest state (A0/A1/A2/A3/A4) - used for class change quests (Sebina/Marlon/Devin)
         private readonly object _legacyQuestStateLock = new();
         private readonly byte[] _legacyQuestStateBytes = new byte[2];
@@ -617,6 +660,8 @@ namespace Client.Main.Core.Client
         public void ResetAfterDisconnect()
         {
             IsInGame = false;
+            if (_isTradeActive)
+                EndTrade(MUnique.OpenMU.Network.Packets.ServerToClient.TradeFinished.TradeResult.Cancelled);
             lock (_playerShopMoveLock)
             {
                 _pendingPlayerShopMove = null;
@@ -635,6 +680,9 @@ namespace Client.Main.Core.Client
             _petInfoRequests.Clear();
             SummonHealthPercent = null;
             ServerKeyConfiguration = null;
+            _availableChatCommands = Array.Empty<ChatCommandInfo>();
+            DiscordIntegration = null;
+            LastRoundTripMilliseconds = null;
             _logger.LogDebug("Transient session state reset after disconnect.");
         }
 
@@ -866,6 +914,7 @@ namespace Client.Main.Core.Client
         public void ClearChaosMachineItems()
         {
             _chaosMachineItems.Clear();
+            ChaosMachineCraftingPreview = null;
             ChaosMachineItemsChanged?.Invoke();
             _logger.LogTrace("ChaosMachineItemsChanged raised after ClearChaosMachineItems.");
         }
@@ -1671,6 +1720,7 @@ namespace Client.Main.Core.Client
             }
             SetPlayerShopOpen(false);
             _inventoryItems.Clear();
+            _itemExpirations.Clear();
             InventoryChanged?.Invoke();
             _logger.LogDebug("Inventory cleared.");
         }
@@ -1703,6 +1753,7 @@ namespace Client.Main.Core.Client
         public void RemoveInventoryItem(byte slot)
         {
             bool removed = _inventoryItems.TryRemove(slot, out _);
+            _itemExpirations.TryRemove(slot, out _);
             if (removed)
             {
                 InventoryChanged?.Invoke();
@@ -2190,13 +2241,16 @@ namespace Client.Main.Core.Client
                     byte harmonyLevel = (byte)(ext.HarmonyOption & 0x0F);
                     if (harmonyType > 0)
                     {
-                        details.Append($" +Har(T:{harmonyType},L:{harmonyLevel})");
+                        string harmony = Utilities.ItemTooltip.JewelHarmonyInfo.Instance.DescribeOption(ext.Group * 512 + ext.Number, harmonyType, harmonyLevel);
+                        details.Append(harmony != null ? $" +Har({harmony}, Lv {harmonyLevel})" : $" +Har(T:{harmonyType},L:{harmonyLevel})");
                     }
                 }
 
                 if (ext.HasSockets && ext.SocketCount > 0)
                 {
-                    details.Append($" +Socket({ext.SocketCount})");
+                    var sockets = Utilities.ItemTooltip.SourceSocketItems.GetSocketBytes(itemData).Select(ParseSocketOption);
+                    details.Append($" +Socket({string.Join(",", sockets)})");
+                    if (ext.SocketBonusOption != 0x0F) details.Append($" +SockBonus({ext.SocketBonusOption})");
                 }
 
                 details.Append($" (Dur: {ext.Durability})");
@@ -2210,7 +2264,6 @@ namespace Client.Main.Core.Client
             byte ancientByte = dataLength > 4 ? itemData[4] : (byte)0; // Contains ancient set info
             byte groupByte = dataLength > 5 ? itemData[5] : (byte)0; // Contains item group high nibble + 380 option flag
             byte harmonyByte = dataLength > 6 ? itemData[6] : (byte)0; // Contains harmony type + socket bonus type
-            byte harmonyLevelByte = dataLength > 7 ? itemData[7] : (byte)0; // Contains harmony level
 
             // Level
             int level = (optionLevelByte & LevelMask) >> LevelShift;
@@ -2246,7 +2299,8 @@ namespace Client.Main.Core.Client
 
             // Harmony Option
             byte legacyHarmonyType = (byte)(harmonyByte & 0xF0);
-            byte legacyHarmonyLevel = harmonyLevelByte;
+            // OpenMU ItemSerializer: byte 6 = (harmony number << 4) | harmony level, or the socket bonus for socket items.
+            byte legacyHarmonyLevel = (byte)(harmonyByte & 0x0F);
             if (legacyHarmonyType > 0)
             {
                 // Placeholder: Mapping harmonyType to name requires a lookup table
@@ -2255,7 +2309,7 @@ namespace Client.Main.Core.Client
 
             // Socket Bonus Option
             byte socketBonusType = (byte)(harmonyByte & 0x0F);
-            if (socketBonusType > 0)
+            if (socketBonusType > 0 && legacyHarmonyType == 0 && dataLength >= 12 && itemData[7] != 0xFF)
             {
                 // Placeholder: Mapping socketBonusType to name requires a lookup table
                 details.Append($" +SockBonus({socketBonusType})");
@@ -2302,15 +2356,12 @@ namespace Client.Main.Core.Client
         }
 
         /// <summary>
-        /// Parses a socket option byte into a readable string (placeholder).
-        /// Requires a lookup table mapping byte values to seed sphere types.
+        /// Parses a socket option byte into a readable string: seed sphere element, option and value
+        /// (byte = (sphere level - 1) * 50 + seed option index, 0xFE = empty socket).
         /// </summary>
         /// <param name="socketByte">The socket option byte.</param>
-        /// <returns>A string representing the socket option (placeholder).</returns>
-        private string ParseSocketOption(byte socketByte)
-        {
-            // TODO: Implement mapping from socketByte value to actual Seed Sphere name/effect
-            return $"S:{socketByte}"; // Placeholder
-        }
+        /// <returns>A string representing the socket option.</returns>
+        private static string ParseSocketOption(byte socketByte)
+            => Utilities.ItemTooltip.SourceSocketItems.DescribeSocket(socketByte);
     }
 }

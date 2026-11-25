@@ -158,6 +158,26 @@ namespace Client.Main.Networking.PacketHandling.Handlers
         [PacketHandler(0x3F, 0x13)]
         public Task HandlePlayerShopListUpdateAsync(Memory<byte> packet) => HandlePlayerShopListAsync(packet);
 
+        /// <summary>
+        /// 0x3F/0A PlayerShopPriceTypesExtended: Count @4, then LE PriceItemType shorts. Stored only; the price
+        /// dialog sets zen prices.
+        /// </summary>
+        [PacketHandler(0x3F, 0x0A)]
+        public Task HandlePlayerShopPriceTypesAsync(Memory<byte> packet)
+        {
+            var data = packet.Span;
+            if (data.Length < 5 || data.Length < 5 + data[4] * 2)
+            {
+                _logger.LogWarning("Invalid player shop price types ({Length} bytes).", packet.Length);
+                return Task.CompletedTask;
+            }
+            var types = new ushort[data[4]];
+            for (int i = 0; i < types.Length; i++)
+                types[i] = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(data[(5 + i * 2)..]);
+            _characterState.PlayerShopPriceTypes = types;
+            return Task.CompletedTask;
+        }
+
         [PacketHandler(0x3F, 0x06)]
         public Task HandlePlayerShopBuyResultAsync(Memory<byte> packet)
         {
@@ -240,6 +260,17 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                         scene?.InventoryControl?.Show();
                     });
                 }
+                else if (ChaosMixControl.MixWindows.TryGetValue(resp.Window, out var mixWindow))
+                {
+                    // Crafting NPCs (harmony refinery, refine stone, restore, seed master / researcher, ...) share the mix box UI.
+                    _characterState.ClearChaosMachineItems();
+                    MuGame.ScheduleOnMainThread(() =>
+                    {
+                        ChaosMixControl.Instance.Show(mixWindow);
+                        var scene = MuGame.Instance?.ActiveScene as GameScene;
+                        scene?.InventoryControl?.Show();
+                    });
+                }
                 else if (resp.Window == NpcWindowResponse.NpcWindow.DevilSquare)
                 {
                     MuGame.ScheduleOnMainThread(() =>
@@ -254,10 +285,18 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                         BloodCastleEnterControl.Instance.ShowWindow();
                     });
                 }
+                else if (resp.Window == NpcWindowResponse.NpcWindow.CastleSeniorNPC)
+                {
+                    MuGame.ScheduleOnMainThread(() => Client.Main.Controls.UI.Game.CastleSiege.CastleSiegeSeniorWindow.Instance.Show());
+                }
+                else if ((byte)resp.Window == 13) // CastleSiegeGuardsman: newer than the OpenMU packet NuGet
+                {
+                    MuGame.ScheduleOnMainThread(() => Client.Main.Controls.UI.Game.CastleSiege.CastleSiegeWindow.Instance.Show());
+                }
                 else
                 {
-                    // e.g. IllusionTemple, LugardDoppelgangerEntry, JerintGaionEvententry, SeedMaster,
-                    // Lahap, PetTrainer – the NPC talk succeeded but the client has no window for it yet.
+                    // e.g. IllusionTemple, LugardDoppelgangerEntry, JerintGaionEvententry,
+                    // Lahap – the NPC talk succeeded but the client has no window for it yet.
                     _logger.LogInformation("NPC window {Window} ({Id}) has no client UI yet; closing the NPC dialog.", resp.Window, (byte)resp.Window);
                     if (resp.Window == NpcWindowResponse.NpcWindow.IllusionTemple)
                         MuGame.ScheduleOnMainThread(() => RequestDialog.ShowInfo("Illusion Temple is not available on this server yet."));
@@ -456,6 +495,23 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 _logger.LogError(ex, "Error parsing ItemCraftingResult packet.");
             }
 
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// ItemCraftingPreviewExtended (0x88): MixType @3, SuccessRate @4, Price @8 (LE, without tax), as the server
+        /// calculated them for the mix box. The mix window shows these instead of its own estimate.
+        /// </summary>
+        [PacketHandler(0x88, PacketRouter.NoSubCode)]
+        public Task HandleItemCraftingPreviewAsync(Memory<byte> packet)
+        {
+            var data = packet.Span;
+            if (data.Length < 12)
+            {
+                _logger.LogWarning("Invalid item crafting preview ({Length} bytes).", packet.Length);
+                return Task.CompletedTask;
+            }
+            _characterState.SetChaosMachineCraftingPreview(data[3], data[4], System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(data[8..]));
             return Task.CompletedTask;
         }
 

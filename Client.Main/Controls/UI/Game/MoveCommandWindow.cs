@@ -226,6 +226,7 @@ namespace Client.Main.Controls.UI.Game
                 }
             }
             if (playerLevel < requiredLevel) return false;
+            if (playerState.MasterLevel < mapInfo.RequiredMasterLevel) return false;
             if (playerZen < mapInfo.RequiredZen) return false;
             if (playerState.HeroState == CharacterHeroState.PlayerKiller1stStage || playerState.HeroState == CharacterHeroState.PlayerKiller2ndStage)
                 return false;

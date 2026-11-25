@@ -795,6 +795,183 @@ if (Environment.GetEnvironmentVariable("MU_TEST_AUDIO_PLAYBACK") == "1")
 
 var unhandled = router.GetUnhandledPacketCounts();
 Check(unhandled.Count == 0, "All event packets were routed to a handler", string.Join(", ", unhandled.Select(u => $"{u.Key.Code:X2}-{u.Key.SubCode:X2}")));
+// Kanturu (0xD1) and Crywolf (0xBD) event packets drive the event-zone HUD state.
+KanturuEventState.Reset();
+await Route(C1(0xD1, 0x03, 2, 3)); // MayaBattle, Monster1 shows the HUD
+Check(KanturuEventState.HudVisible && KanturuEventState.StageLabel == "Maya - Phase 1", "D1/03 Maya monster phase shows the Kanturu HUD");
+await Route(C1(0xD1, 0x05, 0x60, 0xEA, 0, 0)); // 60000 ms
+Check(Math.Abs(KanturuEventState.TimeLeft - 60f) < 0.01f, "D1/05 time limit is read in milliseconds", $"{KanturuEventState.TimeLeft}");
+await Route(C1(0xD1, 0x07, 12, 3));
+Check(KanturuEventState.Monsters == 12 && KanturuEventState.Users == 3, "D1/07 monster and user count");
+await Route(C1(0xD1, 0x04, 1));
+Check(KanturuEventState.ResultVisible && KanturuEventState.ResultVictory, "D1/04 battle result");
+await Route(C1(0xD1, 0x03, 2, 0)); // detail 0 hides the HUD
+Check(!KanturuEventState.HudVisible && KanturuEventState.TimeLeft < 0f, "D1/03 detail 0 hides the Kanturu HUD");
+Check(KanturuGatewayWindow.DescribeState(1, false, 0, 600).Contains("10 minute"), "D1/00 standby text shows the minutes until the opening");
+
+CrywolfEventState.SetState(0, 0);
+await Route(C1(0xBD, 0x00, 2, 3)); // occupation War, state Ready
+Check(CrywolfEventState.Active && CrywolfEventState.State == 3, "BD/00 Ready shows the Crywolf panel");
+await Route(C1(0xBD, 0x02, 75, 0, 0, 0, 0x12, 0x03, 0x00, 0x00, 0x00));
+Check(CrywolfEventState.ShieldPercent == 75 && CrywolfEventState.IsAltarContracted(0) && CrywolfEventState.AltarContractsLeft(0) == 2 && !CrywolfEventState.IsAltarContracted(1),
+      "BD/02 statue shield and altar nibbles");
+await Route(C1(0xBD, 0x04, 0, 5));
+Check(Math.Abs(CrywolfEventState.TimeLeft - 360f) < 0.01f, "BD/04 first packet of a minute counts 60 seconds", $"{CrywolfEventState.TimeLeft}");
+await Route(C1(0xBD, 0x04, 0, 5));
+Check(Math.Abs(CrywolfEventState.TimeLeft - 340f) < 0.01f, "BD/04 second packet of the same minute counts 40 seconds", $"{CrywolfEventState.TimeLeft}");
+await Route(C1(0xBD, 0x05, 0x32, 0, 0, 0, 7));
+Check(CrywolfEventState.BalgassHealth == 50 && CrywolfEventState.DarkElves == 7, "BD/05 Balgass health and Dark Elf count");
+await Route(C1(0xBD, 0x00, 0, 5)); // End, fortress defended
+await Route(C1(0xBD, 0x07, 4, 0, 0, 0, 0x10, 0x27, 0, 0));
+var hero = new byte[2 + 3 + 20];
+hero[0] = 0xC1; hero[1] = (byte)hero.Length; hero[2] = 0xBD; hero[3] = 0x08; hero[4] = 1;
+Encoding.UTF8.GetBytes("Wolf").CopyTo(hero, 5 + 1);
+BinaryPrimitives.WriteUInt32LittleEndian(hero.AsSpan(5 + 12), 900);
+hero[5 + 16] = 3;
+await Route(hero);
+Check(CrywolfEventState.Rank == 4 && CrywolfEventState.Experience == 10000 && CrywolfEventState.Heroes.Count == 1
+      && CrywolfEventState.Heroes[0] == new CrywolfEventState.Hero("Wolf", 900, 3), "BD/07 + BD/08 keep the result after the End state");
+await Route(C1(0xBD, 0x00, 0, 6)); // EndCycle clears
+Check(!CrywolfEventState.Active && CrywolfEventState.Heroes.Count == 0, "BD/00 EndCycle clears the Crywolf result");
+
+// Instanced event HUDs: Illusion Temple (BF/01,06,08,04,09), Doppelganger (BF/0F-14), Empire Guardian (F7/02,04,06).
+{
+    var itHud = InstancedEventHud.Instance;
+    var itResult = InstancedEventResultWindow.Instance;
+    state.MapId = 45;
+    state.Id = 0x0042;
+    state.Name = "Tester";
+    Check(InstancedEventHandler.IllusionTempleWinner(1, 0) == -1 && InstancedEventHandler.IllusionTempleWinner(2, 0) == 0
+          && InstancedEventHandler.IllusionTempleWinner(3, 3) == -1 && InstancedEventHandler.IllusionTempleWinner(2, 5) == 1,
+          "Illusion Temple winner needs two points and the lead");
+
+    await Route(C1(0xBF, 0x09, 0, 1));
+    Check(itHud.Visible && itHud.Mode == InstancedEventMode.IllusionTemple, "BF/09 Preparation opens the Illusion Temple HUD");
+    await Route(C1(0xBF, 0x01, 0x58, 0x02, 0x42, 0x00, 5, 6, 3, 1, 1, 0));
+    Check(itHud.RemainingSeconds == 600 && itHud.AlliedPoints == 3 && itHud.IllusionPoints == 1 && itHud.RelicHolder == "You",
+          "BF/01 fills time, team points and the own relic carrier");
+    await Route(C1(0xBF, 0x01, 0x58, 0x02, 0x77, 0x00, 5, 6, 3, 1, 1, 0));
+    byte[] relic = new byte[16];
+    relic[0] = 0xC1; relic[1] = 16; relic[2] = 0xBF; relic[3] = 0x08; relic[4] = 0x77;
+    Encoding.UTF8.GetBytes("Bob").CopyTo(relic, 6);
+    await Route(relic);
+    Check(itHud.RelicHolder == "Bob", "BF/08 names the relic carrier announced by BF/01");
+    await Route(C1(0xBF, 0x01, 0x58, 0x02, 0xFF, 0xFF, 0xFF, 0xFF, 3, 1, 1, 0));
+    Check(itHud.RelicHolder == "--", "BF/01 without carrier clears the relic holder");
+    await Route(C1(0xBF, 0x06, 4));
+    Check(itHud.SkillPoints == 4, "BF/06 updates the skill points");
+    await Route(C1(0xBF, 0x01, 1, 2)); // truncated
+    Check(itHud.Visible, "truncated BF/01 is ignored");
+
+    byte[] itResultPacket = new byte[7 + 40];
+    itResultPacket[0] = 0xC1; itResultPacket[1] = (byte)itResultPacket.Length; itResultPacket[2] = 0xBF; itResultPacket[3] = 0x04;
+    itResultPacket[4] = 5; itResultPacket[5] = 2; itResultPacket[6] = 2;
+    Encoding.UTF8.GetBytes("Tester").CopyTo(itResultPacket, 7);
+    itResultPacket[7 + 11] = 0;
+    BinaryPrimitives.WriteUInt32LittleEndian(itResultPacket.AsSpan(7 + 16), 123456);
+    Encoding.UTF8.GetBytes("Foe").CopyTo(itResultPacket, 7 + 20);
+    itResultPacket[7 + 20 + 11] = 1;
+    await Route(itResultPacket);
+    Check(itResult.Visible && itResult.Headline == "VICTORY" && itResult.RowCount == 2 && itHud.Mode == InstancedEventMode.None,
+          "BF/04 shows the Illusion Temple score board and closes the HUD");
+    itResult.Hide();
+    await Route(C1(0xBF, 0x09, 0, 1));
+    await Route(C1(0xBF, 0x09, 0, 3));
+    Check(itHud.Mode == InstancedEventMode.None, "BF/09 Ended closes the Illusion Temple HUD");
+
+    var dgHud = InstancedEventHud.Instance;
+    await Route(C1(0xBF, 0x10, 2));
+    Check(dgHud.Visible && dgHud.Mode == InstancedEventMode.Doppelganger, "BF/10 Playing opens the Doppelganger frame");
+    await Route(C1(0xBF, 0x14, 30, 4));
+    await Route(C1(0xBF, 0x0F, 7));
+    await Route(C1(0xBF, 0x11, 0, 12));
+    Check(dgHud.GoalMax == 30 && dgHud.GoalCount == 4 && dgHud.MonsterPosition == 7 && dgHud.IceWalkerPosition == 12,
+          "BF/14, BF/0F and BF/11 update goal, monster and ice walker");
+    await Route(C1(0xBF, 0x11, 1, 0));
+    Check(dgHud.IceWalkerPosition == -1, "BF/11 Disappeared removes the ice walker");
+    await Route(C1(0xBF, 0x12, 0x2C, 0x01, 2, 0, 0x42, 0, 0x3F, 9, 0x43, 0, 0x3F, 15));
+    Check(dgHud.RemainingSeconds == 300 && dgHud.PlayerCount == 2, "BF/12 carries the time and both party positions");
+    await Route(C1(0xBF, 0x12, 0x2C, 0x01, 5, 0, 0x42, 0)); // announces 5 players, carries none
+    Check(dgHud.PlayerCount == 0, "BF/12 never reads more players than the packet carries");
+    await Route(C1(0xBF, 0x13, 2));
+    Check(itResult.Visible && itResult.Headline == "FAILED" && dgHud.Mode == InstancedEventMode.None,
+          "BF/13 shows the Doppelganger result and closes the frame");
+    itResult.Hide();
+
+    await Route(C1(0xF7, 0x02, 0, 3, 2, 1, 0x10, 0x27, 0, 0));
+    Check(dgHud.Visible && dgHud.Mode == InstancedEventMode.EmpireGuardian && dgHud.Day == 3 && dgHud.Zone == 2,
+          "F7/02 success opens the Empire Guardian HUD");
+    await Route(C1(0xF7, 0x04, 2, 0, 0, 0, 0x70, 0x17, 0, 0, 9, 0, 0, 0));
+    Check(dgHud.TimerType == 2 && dgHud.RemainingSeconds == 6 && dgHud.MonsterCount == 9, "F7/04 updates timer type, time and monsters");
+    await Route(C1(0xF7, 0x06, 2, 0, 0, 0, 0xA0, 0x86, 0x01, 0));
+    Check(itResult.Visible && itResult.Headline == "EVENT COMPLETED" && dgHud.Mode == InstancedEventMode.None,
+          "F7/06 shows the Empire Guardian result and hides the HUD");
+    itResult.Hide();
+}
+
+// Event maps and event items: Illusion Temple BF/00,02,03,07, Doppelganger BF/0E, Crywolf BD/03,0C, Kanturu D1/06,
+// Raklion D1/10-13, Lucky Coins BF/0B-0D and the Golden Archer 0x94. Returns how many main thread jobs a packet scheduled.
+{
+    async Task<int> RouteCounting(byte[] packet)
+    {
+        int before = dispatcher.PendingCount;
+        await router.RoutePacketAsync(new ReadOnlySequence<byte>(packet));
+        int scheduled = dispatcher.PendingCount - before;
+        dispatcher.ProcessPending();
+        return scheduled;
+    }
+
+    state.Id = 0x0042;
+    Check(await RouteCounting(C1(0xBF, 0x00, 4)) == 1 && await RouteCounting(C1(0xBF, 0x00, 0)) == 0
+          && await RouteCounting(C1(0xBF, 0x00, 1)) == 0
+          && InstancedEventHandler.DescribeIllusionTempleEnter(4) == "The Illusion Temple is full."
+          && InstancedEventHandler.DescribeIllusionTempleEnter(7)!.Contains("Player killers"),
+          "BF/00 shows the Illusion Temple refusals the server does not explain");
+    Check(await RouteCounting(C1(0xBF, 0x02, 1, 0x00, 0xD2, 0, 0x42, 0x00, 0x43, 0x00)) == 1
+          && await RouteCounting(C1(0xBF, 0x02, 0, 0x00, 0xD2, 0, 0x77, 0x00, 0x43, 0x00)) == 0
+          && InstancedEventHandler.IllusionTempleSkillName(210) == "Order of Protection",
+          "BF/02 reports the own skill usage result only");
+    await Route(C1(0xBF, 0x03, 1, 2, 3, 4, 5, 6));
+    Check(InstancedEventHud.Instance.IllusionTempleUserCounts.SequenceEqual(new[] { 1, 2, 3, 4, 5, 6 }), "BF/03 stores the players per temple");
+    Check(await RouteCounting(C1(0xBF, 0x07, 0x00, 0xD3, 0x42, 0x00)) == 1 && await RouteCounting(C1(0xBF, 0x07, 0x00, 0xD3, 0x50, 0x00)) == 0,
+          "BF/07 reports a skill that wore off on the own character");
+    Check(await RouteCounting(C1(0xBF, 0x0E, 2)) == 1 && await RouteCounting(C1(0xBF, 0x0E, 4)) == 0
+          && InstancedEventHandler.DescribeDoppelgangerEnter(3)!.Contains("Outlaw"),
+          "BF/0E shows the Doppelganger refusals");
+
+    await Route(C1(0xBD, 0x03, 1, 0x13, 0x01, 0x3F)); // key 319 = altar 2, contracted with 3 contracts left
+    Check(CrywolfEventState.IsAltarContracted(2) && CrywolfEventState.AltarContractsLeft(2) == 3, "BD/03 updates the contracted altar");
+    await Route(C1(0xBD, 0x03, 0, 0x10, 0x00, 0x00)); // key out of range is ignored
+    Check(await RouteCounting(C1(0xBD, 0x0C, 0x01, 0x5C, 100, 50, 120, 60)) == 1, "BD/0C schedules the ballista arrow (no world: skipped)");
+    Check(await RouteCounting(C1(0xD1, 0x06, 0, 0, 1)) == 1, "D1/06 schedules the Maya wide-area attack");
+
+    await Route(C1(0xD1, 0x10, 5, 3, 1, 0, 0x3C, 0, 0, 0));
+    Check(RaklionEventState.State == 5 && RaklionEventState.SelupanState == 3, "D1/10 stores the Raklion and Selupan state");
+    await Route(C1(0xD1, 0x12, 11, 9));
+    Check(RaklionEventState.State == 5 && RaklionEventState.SelupanState == 9, "D1/12 DetailState only changes the Selupan state");
+    await Route(C1(0xD1, 0x13, 1));
+    Check(RaklionEventState.LastBattleSuccess == true, "D1/13 stores the Selupan battle result");
+    await Route(C1(0xD1, 0x11, 10, 0));
+    Check(RaklionEventState.State == 10 && RaklionEventState.SelupanState == 0 && RaklionEventState.LastBattleSuccess == null,
+          "D1/11 End resets the Raklion battle");
+
+    await Route(C1(0xBF, 0x0B, 7, 0, 0, 0));
+    Check(EventItemState.LuckyCoinsRegistered == 7, "BF/0B stores the registered Lucky Coins");
+    await Route(C1(0xBF, 0x0C, 1, 0, 0, 0, 8, 0, 0, 0));
+    Check(EventItemState.LuckyCoinsRegistered == 8 && EventZoneHandler.DescribeLuckyCoinRegistration(100, 0).Contains("already"),
+          "BF/0C LuckyCoinRegistrationResponse updates the count");
+    Check(await RouteCounting(C1(0xBF, 0x0D, 2)) == 1 && EventZoneHandler.DescribeLuckyCoinExchange(2).Contains("2 x 4"),
+          "BF/0D LuckyCoinExchangeResponse explains the result");
+    await Route(C1(0x94, 0, 25, 0, 0, 0, 4, 0, 0xFF, 0xFF, 0xFF, 0xFF));
+    await Route(C1(0x94, 0)); // truncated
+    Check(EventItemState.EventChipsRegistered == 25 && EventItemState.EventChipsInInventory == 4, "94 stores the Golden Archer counts");
+
+    var mine = new HashSet<(byte, byte)> { (0xBF, 0x00), (0xBF, 0x02), (0xBF, 0x03), (0xBF, 0x07), (0xBF, 0x0E), (0xBD, 0x03), (0xBD, 0x0C),
+        (0xD1, 0x06), (0xD1, 0x10), (0xD1, 0x11), (0xD1, 0x12), (0xD1, 0x13), (0xBF, 0x0B), (0xBF, 0x0C), (0xBF, 0x0D), (0x94, PacketRouter.NoSubCode) };
+    var missed = router.GetUnhandledPacketCounts().Keys.Where(k => mine.Contains((k.Code, k.SubCode))).ToList();
+    Check(missed.Count == 0, "Event map and event item packets were routed", string.Join(", ", missed.Select(k => $"{k.Code:X2}-{k.SubCode:X2}")));
+}
+
 Console.WriteLine(failures == 0 ? "Event packet checks passed." : $"Event packet checks: {failures} failure(s).");
 return failures == 0 ? 0 : 1;
 

@@ -100,7 +100,49 @@ namespace Client.Main.Controls.UI.Game
             Theme.GlowAncient,
             Theme.GlowLegendary);
 
+        /// <summary>
+        /// Mix dialog of one crafting NPC: title, its recipe groups of mix.bmd and the storage kind OpenMU expects
+        /// for item moves while this dialog is open (MoveItemAction checks it against the opened NPC window).
+        /// </summary>
+        public sealed record MixWindow(string Title, ItemStorageKind StorageKind, params MixInventoryType[] Groups);
+
+        public static readonly MixWindow ChaosMachineWindow = new("CHAOS MIX", ItemStorageKind.ChaosMachine,
+            MixInventoryType.GoblinNormal, MixInventoryType.GoblinChaosItem, MixInventoryType.GoblinAdd380);
+
+        /// <summary>
+        /// Crafting NPC windows OpenMU opens (OpenNpcWindowPlugIn). The mix.bmd recipe ids of these groups are the
+        /// OpenMU crafting numbers (e.g. 33 gemstone refinery, 34 refine stone, 35 restore, 42-45 socket craftings).
+        /// </summary>
+        public static readonly IReadOnlyDictionary<NpcWindowResponse.NpcWindow, MixWindow> MixWindows = new Dictionary<NpcWindowResponse.NpcWindow, MixWindow>
+        {
+            [NpcWindowResponse.NpcWindow.ChaosMachine] = ChaosMachineWindow,
+            [NpcWindowResponse.NpcWindow.PetTrainer] = new("PET TRAINER", ItemStorageKind.PetTrainer, MixInventoryType.Trainer),
+            [NpcWindowResponse.NpcWindow.ElphisRefinery] = new("HARMONY REFINERY", ItemStorageKind.Refinery, MixInventoryType.Elpis),
+            [NpcWindowResponse.NpcWindow.RefineStoneMaking] = new("REFINE STONE", ItemStorageKind.Smelting, MixInventoryType.Osbourne),
+            [NpcWindowResponse.NpcWindow.RemoveJohOption] = new("RESTORE ITEM", ItemStorageKind.ItemRestore, MixInventoryType.Jerridon),
+            [NpcWindowResponse.NpcWindow.ChaosCardCombination] = new("CHAOS CARD", ItemStorageKind.ChaosCardMaster, MixInventoryType.ChaosCard),
+            [NpcWindowResponse.NpcWindow.CherryBlossomBranchesAssembly] = new("CHERRY BLOSSOM", ItemStorageKind.CherryBlossomSpirit, MixInventoryType.CherryBlossom),
+            [NpcWindowResponse.NpcWindow.SeedMaster] = new("SEED MASTER", ItemStorageKind.SeedCrafting, MixInventoryType.ExtractSeed, MixInventoryType.SeedSphere),
+            [NpcWindowResponse.NpcWindow.SeedResearcher] = new("SEED RESEARCHER", ItemStorageKind.SeedMountCrafting, MixInventoryType.AttachSocket, MixInventoryType.DetachSocket),
+        };
+
+        /// <summary>True for the storage kinds of the mix dialogs (the server echoes them in ItemMoved).</summary>
+        public static bool IsMixStorage(ItemStorageKind kind)
+            => kind == ItemStorageKind.ChaosMachine || MixWindows.Values.Any(w => w.StorageKind == kind);
+
+        // OpenMU crafting numbers of the seed sphere mount / removal (SocketSystem.cs); they need the socket slot.
+        private const int MountSeedSphereMixId = 44;
+        private const int RemoveSeedSphereMixId = 45;
+
         private static ChaosMixControl _instance;
+
+        private MixWindow _window = ChaosMachineWindow;
+        private IReadOnlyList<MixRecipe> _recipes;
+        private readonly List<byte> _socketChoices = new();
+        private byte _socketSlot;
+
+        /// <summary>Storage kind of the open mix dialog, used for item moves into / out of the mix box.</summary>
+        public ItemStorageKind StorageKind => _window.StorageKind;
 
         private readonly NetworkManager _networkManager;
         private readonly ILogger<ChaosMixControl> _logger;
@@ -180,8 +222,10 @@ namespace Client.Main.Controls.UI.Game
             InvalidateStaticSurface();
         }
 
-        public void Show()
+        public void Show(MixWindow window = null)
         {
+            _window = window ?? ChaosMachineWindow;
+            _recipes = MixRecipeDatabase.GetRecipes(_window.Groups);
             ForceAlignNow();
             Align = ControlAlign.None;
 
@@ -462,7 +506,7 @@ namespace Client.Main.Controls.UI.Game
 
             if (_font != null)
             {
-                string title = "CHAOS MIX";
+                string title = _window.Title;
                 float scale = 0.52f;
                 Vector2 size = _font.MeasureString(title) * scale;
                 Vector2 pos = new((ControlSize.X - size.X) / 2, (HEADER_HEIGHT - size.Y) / 2 + 3);
@@ -727,6 +771,13 @@ namespace Client.Main.Controls.UI.Game
                 return true;
             }
 
+            if (_socketChoices.Count > 1 && Translate(_infoRect).Contains(MuGame.Instance.UiMouseState.Position))
+            {
+                _socketSlot = _socketChoices[(_socketChoices.IndexOf(_socketSlot) + 1) % _socketChoices.Count];
+                UpdateRecipeInfo();
+                return true;
+            }
+
             return false;
         }
 
@@ -806,6 +857,13 @@ namespace Client.Main.Controls.UI.Game
             }
 
             int mixId = _evaluation.CurrentRecipe.MixId;
+            if (NeedsSocketSlot(mixId) && _socketChoices.Count == 0)
+            {
+                RequestDialog.ShowInfo(mixId == MountSeedSphereMixId ? "The item has no free socket." : "No seed sphere is mounted on the item.");
+                return;
+            }
+
+            byte socketSlot = _socketSlot;
             int chance = _evaluation.SuccessRate;
             uint cost = _evaluation.RequiredZen;
 
@@ -813,13 +871,13 @@ namespace Client.Main.Controls.UI.Game
 
             RequestDialog.Show(
                 message,
-                onAccept: () => SendMixRequest(mixId),
+                onAccept: () => SendMixRequest(mixId, socketSlot),
                 onReject: null,
                 acceptText: "Mix",
                 rejectText: "Cancel");
         }
 
-        private void SendMixRequest(int mixId)
+        private void SendMixRequest(int mixId, byte socketSlot)
         {
             var svc = _networkManager?.GetCharacterService();
             if (svc == null)
@@ -834,7 +892,7 @@ namespace Client.Main.Controls.UI.Game
             {
                 try
                 {
-                    await svc.SendChaosMachineMixRequestAsync(mixId, socketSlot: 0);
+                    await svc.SendChaosMachineMixRequestAsync(mixId, socketSlot);
                 }
                 catch (Exception ex)
                 {
@@ -926,17 +984,35 @@ namespace Client.Main.Controls.UI.Game
 
         private void UpdateRecipeInfo()
         {
-            _evaluation = MixRecipeDatabase.EvaluateChaosMachine(_items);
+            _evaluation = MixRecipeDatabase.Evaluate(_items, _recipes ??= MixRecipeDatabase.GetRecipes(_window.Groups));
+            // ItemCraftingPreviewExtended (0x88): the server's rate (with the crafting bonus) and price win over the local estimate.
+            if (_characterState?.ChaosMachineCraftingPreview is { MixType: > 0 } preview && _evaluation?.CurrentRecipe?.MixId == preview.MixType)
+            {
+                _evaluation = new ChaosMixEvaluation
+                {
+                    CurrentRecipe = _evaluation.CurrentRecipe,
+                    MostSimilarRecipe = _evaluation.MostSimilarRecipe,
+                    SuccessRate = preview.SuccessRate,
+                    RequiredZen = preview.Price,
+                };
+            }
             _infoLines.Clear();
 
             var recipe = _evaluation?.CurrentRecipe;
             var similar = _evaluation?.MostSimilarRecipe;
+            UpdateSocketChoices(recipe?.MixId ?? 0);
 
             if (recipe != null)
             {
                 _infoLines.Add($"Mix: {FormatMixType(recipe.MixId)}");
                 _infoLines.Add($"Chance: {_evaluation.SuccessRate}%");
                 _infoLines.Add($"Cost: {FormatZen(_evaluation.RequiredZen)} Zen");
+                if (NeedsSocketSlot(recipe.MixId))
+                {
+                    _infoLines.Add(_socketChoices.Count == 0
+                        ? (recipe.MixId == MountSeedSphereMixId ? "Socket: no free socket" : "Socket: no seed sphere mounted")
+                        : $"Socket: {_socketSlot + 1}" + (_socketChoices.Count > 1 ? " (click here to change)" : string.Empty));
+                }
                 _infoLines.Add(string.Empty);
             }
             else
@@ -967,6 +1043,31 @@ namespace Client.Main.Controls.UI.Game
             }
 
             _warningLine = "Failure may destroy items.";
+        }
+
+        private static bool NeedsSocketSlot(int mixId) => mixId == MountSeedSphereMixId || mixId == RemoveSeedSphereMixId;
+
+        /// <summary>
+        /// Sockets of the socket item in the mix box the mix can use: empty ones for mounting, filled ones for removal.
+        /// Keeps the chosen slot while it stays valid.
+        /// </summary>
+        private void UpdateSocketChoices(int mixId)
+        {
+            _socketChoices.Clear();
+            if (NeedsSocketSlot(mixId))
+            {
+                var sockets = _items.Select(i => Core.Utilities.ItemTooltip.SourceSocketItems.GetSocketBytes(i.RawData)).FirstOrDefault(b => b.Length > 0)
+                              ?? Array.Empty<byte>();
+                for (int i = 0; i < sockets.Length; i++)
+                {
+                    bool empty = sockets[i] == Core.Utilities.ItemTooltip.SourceSocketItems.SOCKET_EMPTY;
+                    if (mixId == MountSeedSphereMixId ? empty : !empty && sockets[i] != Core.Utilities.ItemTooltip.SourceSocketItems.SOCKET_NONE)
+                        _socketChoices.Add((byte)i);
+                }
+            }
+
+            if (!_socketChoices.Contains(_socketSlot))
+                _socketSlot = _socketChoices.Count > 0 ? _socketChoices[0] : (byte)0;
         }
 
         private static string FormatZen(uint value)
@@ -1361,7 +1462,7 @@ namespace Client.Main.Controls.UI.Game
             {
                 try
                 {
-                    await svc.SendStorageItemMoveAsync(ItemStorageKind.ChaosMachine, from, ItemStorageKind.ChaosMachine, to, version, raw);
+                    await svc.SendStorageItemMoveAsync(StorageKind, from, StorageKind, to, version, raw);
                 }
                 catch (Exception ex)
                 {
@@ -1397,7 +1498,7 @@ namespace Client.Main.Controls.UI.Game
                 {
                     try
                     {
-                        await svc.SendStorageItemMoveAsync(ItemStorageKind.ChaosMachine, fromSlot, ItemStorageKind.Inventory, toSlot, version, raw);
+                        await svc.SendStorageItemMoveAsync(StorageKind, fromSlot, ItemStorageKind.Inventory, toSlot, version, raw);
                     }
                     catch (Exception ex)
                     {

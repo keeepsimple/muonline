@@ -59,7 +59,45 @@ namespace Client.Main.Data
 
         public List<MoveCommandInfo> GetMoveCommandDataList()
         {
-            return _moveCommands.ToList();
+            return (_serverMoveCommands ?? _moveCommands).ToList();
+        }
+
+        // ponytail: kept until the next WarpListExtended; a server without it after a reconnect still shows the old list.
+        private List<MoveCommandInfo> _serverMoveCommands;
+
+        /// <summary>
+        /// WarpListExtended (0xF5 09): the server's warps replace the data file list. Warps the data files know
+        /// keep their name; others get the server's name.
+        /// </summary>
+        public void SetServerWarpList(IEnumerable<(int Index, int LevelRequirement, int Costs, string Name)> warps)
+        {
+            _serverMoveCommands = warps.Select(w =>
+            {
+                var known = _moveCommands.FirstOrDefault(m => m.Index == w.Index);
+                return new MoveCommandInfo
+                {
+                    Index = w.Index,
+                    ServerMapName = known.ServerMapName ?? w.Name,
+                    DisplayName = known.DisplayName ?? w.Name,
+                    RequiredLevel = w.LevelRequirement,
+                    RequiredZen = w.Costs,
+                    IsEventMap = known.IsEventMap,
+                    IsStrifeMap = known.IsStrifeMap,
+                };
+            }).OrderBy(m => m.RequiredLevel).ThenBy(m => m.DisplayName).ToList();
+        }
+
+        /// <summary>WarpRequirementsExtended (0xF5 0B): minimum master level per warp index of the server list.</summary>
+        public void SetServerWarpMasterLevels(IReadOnlyDictionary<int, int> masterLevelByIndex)
+        {
+            if (_serverMoveCommands == null)
+                return;
+            for (int i = 0; i < _serverMoveCommands.Count; i++)
+            {
+                var warp = _serverMoveCommands[i];
+                warp.RequiredMasterLevel = masterLevelByIndex.TryGetValue(warp.Index, out int level) ? level : 0;
+                _serverMoveCommands[i] = warp;
+            }
         }
 
         private static bool TryLoadFromMovereq(out List<MoveCommandInfo> moveCommands)

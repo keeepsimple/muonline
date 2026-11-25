@@ -810,6 +810,7 @@ namespace Client.Main.Controls.UI.Game
 
                         DrawStaticMarkers(spriteBatch, source, drawScale, center);
                         DrawWorldMarkers(spriteBatch, player, source, drawScale, center);
+                        DrawCastleSiegeMarkers(spriteBatch, source, drawScale, center);
                         TryGetLocalMapPosition(GetPlayerTilePosition(player), source, drawScale, center, out Vector2 playerMapPosition);
                         playerMapPosition.X = MathHelper.Clamp(playerMapPosition.X, 8f, MapSize - 8f);
                         playerMapPosition.Y = MathHelper.Clamp(playerMapPosition.Y, 8f, MapSize - 8f);
@@ -989,6 +990,32 @@ namespace Client.Main.Controls.UI.Game
                 DrawProceduralMarker(spriteBatch, localPosition, kind);
                 string name = string.IsNullOrWhiteSpace(walker.DisplayName) ? category : walker.DisplayName;
                 AddHoverTarget(localPosition, $"{category}: {name}");
+            }
+        }
+
+        /// <summary>Castle Siege commander snapshots (0xB6 / 0xBB, pushed every 3 s): own side players, gates, statues.</summary>
+        private void DrawCastleSiegeMarkers(SpriteBatch spriteBatch, Rectangle source, Vector2 drawScale, Vector2 center)
+        {
+            var network = MuGame.Network;
+            var siege = network?.GetCastleSiegeManager();
+            if (siege == null || network.GetCharacterState().MapId != Core.Client.CastleSiegeManager.SiegeMapId
+                || DateTime.UtcNow - siege.MiniMapUpdated > TimeSpan.FromSeconds(10))
+            {
+                return;
+            }
+
+            foreach (var (x, y) in siege.MiniMapPlayers)
+            {
+                if (TryGetLocalMapPosition(new Vector2(x, y), source, drawScale, center, out Vector2 position))
+                    DrawProceduralMarker(spriteBatch, position, ProceduralMarkerKind.Player);
+            }
+
+            foreach (var (isGate, x, y) in siege.MiniMapNpcs)
+            {
+                if (!TryGetLocalMapPosition(new Vector2(x, y), source, drawScale, center, out Vector2 position))
+                    continue;
+                DrawProceduralMarker(spriteBatch, position, ProceduralMarkerKind.Npc);
+                AddHoverTarget(position, isGate ? "Castle Gate" : "Guardian Statue");
             }
         }
 

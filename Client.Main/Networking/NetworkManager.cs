@@ -45,6 +45,11 @@ namespace Client.Main.Networking
         private readonly CharacterState _characterState;
         private readonly PartyManager _partyManager;
         private readonly GuildManager _guildManager;
+        private readonly GensManager _gensManager;
+        private readonly CastleSiegeManager _castleSiegeManager = new();
+        private readonly CastleSiegeService _castleSiegeService;
+        private readonly Core.Client.CashShop.CashShopManager _cashShopManager = new();
+        private readonly CashShopService _cashShopService;
         private readonly FriendManager _friendManager;
         private readonly ScopeManager _scopeManager;
         private readonly Dictionary<byte, byte> _serverDirectionMap;
@@ -72,6 +77,12 @@ namespace Client.Main.Networking
         // Properties
         public ClientConnectionState CurrentState => _currentState;
         public bool IsConnected => _connectionManager.IsConnected;
+
+        /// <summary>
+        /// True while the Disconnected state was caused by the client's own logout to server selection,
+        /// so scenes do not treat it as a lost connection.
+        /// </summary>
+        public bool IsLogoutDisconnect { get; private set; }
         public CharacterState GetCharacterState() => _characterState;
         public void UpdateBuffs() => _packetRouter.UpdateBuffs();
         public BuffManager GetBuffManager() => _packetRouter.BuffManager;
@@ -82,6 +93,11 @@ namespace Client.Main.Networking
         public ScopeManager GetScopeManager() => _scopeManager;
         public PartyManager GetPartyManager() => _partyManager;
         public GuildManager GetGuildManager() => _guildManager;
+        public GensManager GetGensManager() => _gensManager;
+        public CastleSiegeManager GetCastleSiegeManager() => _castleSiegeManager;
+        public CastleSiegeService GetCastleSiegeService() => _castleSiegeService;
+        public Core.Client.CashShop.CashShopManager GetCashShopManager() => _cashShopManager;
+        public CashShopService GetCashShopService() => _cashShopService;
 
         /// <summary>Diagnostics only (offline stress scenes): routes a server packet as if it was received.</summary>
         internal Task InjectPacketForDiagnosticsAsync(byte[] packet)
@@ -106,6 +122,7 @@ namespace Client.Main.Networking
             _scopeManager = scopeManager;
             _partyManager = new PartyManager(_loggerFactory);
             _guildManager = new GuildManager(_loggerFactory);
+            _gensManager = new GensManager();
             _friendManager = new FriendManager(_loggerFactory);
             _scopeManager.GuildManager = _guildManager;
 
@@ -118,6 +135,8 @@ namespace Client.Main.Networking
             _loginService = new LoginService(_connectionManager, _loggerFactory.CreateLogger<LoginService>(), clientVersionBytes, clientSerialBytes, Xor3Keys);
             _characterService = new CharacterService(_connectionManager, _loggerFactory.CreateLogger<CharacterService>());
             _connectServerService = new ConnectServerService(_connectionManager, _loggerFactory.CreateLogger<ConnectServerService>());
+            _castleSiegeService = new CastleSiegeService(_connectionManager, _loggerFactory.CreateLogger<CastleSiegeService>());
+            _cashShopService = new CashShopService(_connectionManager, _loggerFactory.CreateLogger<CashShopService>());
 
             _packetRouter = new PacketRouter(loggerFactory, _characterService, _loginService, targetVersion, this, _characterState, _scopeManager, _partyManager, _settings);
 
@@ -519,6 +538,8 @@ namespace Client.Main.Networking
                 var oldState = _currentState;
                 _logger.LogInformation(">>> UpdateState: Changing state from {OldState} to {NewState}", oldState, newState);
                 _currentState = newState;
+                if (newState != ClientConnectionState.Disconnected)
+                    IsLogoutDisconnect = false;
                 _logger.LogInformation("=== UpdateState: _currentState is now {CurrentState}", _currentState);
 
                 MuGame.ScheduleOnMainThread(() =>
@@ -674,12 +695,29 @@ namespace Client.Main.Networking
             }
         }
 
+        /// <summary>
+        /// Resets per-session feature state on disconnect or logout. It runs on the main thread because the UI
+        /// enumerates these collections every frame; new per-session state the game thread reads goes here.
+        /// </summary>
+        internal void ScheduleSessionReset() => MuGame.ScheduleOnMainThread(() =>
+        {
+            _gensManager.Reset();
+            _cashShopManager.Reset();
+            _castleSiegeManager.Reset();
+            KanturuEventState.Reset();
+            CrywolfEventState.SetState(0, 0);
+            Controls.UI.Game.InstancedEventHud.Instance.Hide();
+            if (Worlds.ValleyOfLorenWorld.CastleSiegeBattleActive)
+                Worlds.ValleyOfLorenWorld.SetCastleSiegeBattleActive(false);
+        });
+
         internal async Task ProcessLogoutResponseAsync(LogOutType type)
         {
             _logger.LogInformation(">>> ProcessLogoutResponse: Received logout response type {Type}", type);
             _characterState.IsInGame = false;
             _guildManager.Reset();
             _friendManager.Reset();
+            ScheduleSessionReset();
 
             switch (type)
             {
@@ -696,6 +734,7 @@ namespace Client.Main.Networking
                     break;
 
                 case LogOutType.BackToServerSelection:
+                    IsLogoutDisconnect = true;
                     try
                     {
                         await _connectionManager.DisconnectAsync();

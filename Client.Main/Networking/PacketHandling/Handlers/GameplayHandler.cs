@@ -388,6 +388,147 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             return Task.CompletedTask;
         }
 
+        // ─────────────────────────── OpenMU extensions (F5) ───────────────────────────
+
+        private static string ReadString(ReadOnlySpan<byte> field) => PlayerShopListParser.ReadString(field);
+
+        /// <summary>AvailableChatCommand (C2 0xF5/0x01): Index @5, MinimumCharacterStatus @7, Command @9 (32),
+        /// Name @41 (48), Description @89 (256). Stored; the chat input has no command suggestions yet.</summary>
+        [PacketHandler(0xF5, 0x01)]
+        public Task HandleAvailableChatCommandAsync(Memory<byte> packet)
+        {
+            var span = packet.Span;
+            if (span.Length < 345)
+            {
+                _logger.LogWarning("AvailableChatCommand too short: {Length}", span.Length);
+                return Task.CompletedTask;
+            }
+            _characterState.AddAvailableChatCommand(span[5], new CharacterState.ChatCommandInfo(
+                ReadString(span.Slice(9, 32)), ReadString(span.Slice(41, 48)), ReadString(span.Slice(89, 256)), span[7]));
+            return Task.CompletedTask;
+        }
+
+        /// <summary>DiscordIntegrationInfo (0xF5/0x03, 224 bytes): link state @4, bridged guild / alliance / world chat
+        /// @5..7, InviteUrl @92 (100), LinkedUserName @192 (32). Tells the player which chats are mirrored.</summary>
+        [PacketHandler(0xF5, 0x03)]
+        public Task HandleDiscordIntegrationInfoAsync(Memory<byte> packet)
+        {
+            var span = packet.Span;
+            if (span.Length < 224)
+            {
+                _logger.LogWarning("DiscordIntegrationInfo too short: {Length}", span.Length);
+                return Task.CompletedTask;
+            }
+            var info = new CharacterState.DiscordIntegrationInfo(span[4] != 0, span[5] != 0, span[6] != 0, span[7] != 0,
+                ReadString(span.Slice(92, 100)), ReadString(span.Slice(192, 32)));
+            _characterState.DiscordIntegration = info;
+
+            var bridged = new System.Collections.Generic.List<string>(3);
+            if (info.IsGuildChatBridged) bridged.Add("guild");
+            if (info.IsAllianceChatBridged) bridged.Add("alliance");
+            if (info.IsWorldChatBridged) bridged.Add("world");
+            if (bridged.Count > 0)
+                ShowSystemMessage($"Your {string.Join(", ", bridged)} chat is mirrored to Discord.", MessageType.System);
+            if (info.IsAccountLinked && info.LinkedUserName.Length > 0)
+                ShowSystemMessage($"Your account is linked to the Discord user {info.LinkedUserName}.", MessageType.System);
+            return Task.CompletedTask;
+        }
+
+        /// <summary>DiscordLinkCode (0xF5/0x05): Result @4, LinkCode @5 (10), ValidMinutes @15.</summary>
+        [PacketHandler(0xF5, 0x05)]
+        public Task HandleDiscordLinkCodeAsync(Memory<byte> packet)
+        {
+            var span = packet.Span;
+            if (span.Length < 16)
+            {
+                _logger.LogWarning("DiscordLinkCode too short: {Length}", span.Length);
+                return Task.CompletedTask;
+            }
+            string text = span[4] switch
+            {
+                0 => $"Your Discord link code is {ReadString(span.Slice(5, 10))} (valid for {span[15]} minutes). Enter it in Discord with /link.",
+                1 => "Linking to Discord is not available.",
+                2 => "A Discord link code was requested a moment ago. Please try again in a few seconds.",
+                var r => $"Requesting a Discord link code failed ({r}).",
+            };
+            ShowSystemMessage(text, span[4] == 0 ? MessageType.System : MessageType.Error);
+            return Task.CompletedTask;
+        }
+
+        /// <summary>ExternalChatMessage (C2 0xF5/0x07): Source @5, Scope @6 (guild, alliance, world), SenderName @7 (48),
+        /// Message @55. Shown in the chat of its scope, marked with its source.</summary>
+        [PacketHandler(0xF5, 0x07)]
+        public Task HandleExternalChatMessageAsync(Memory<byte> packet)
+        {
+            var span = packet.Span;
+            if (span.Length < 56)
+            {
+                _logger.LogWarning("ExternalChatMessage too short: {Length}", span.Length);
+                return Task.CompletedTask;
+            }
+            string sender = $"[{(span[5] == 0 ? "Discord" : "External")}] {ReadString(span.Slice(7, 48))}";
+            string message = ReadString(span[55..]);
+            var type = span[6] switch { 0 => MessageType.Guild, 1 => MessageType.Union, _ => MessageType.Chat };
+            MuGame.ScheduleOnMainThread(() =>
+                (MuGame.Instance?.ActiveScene as GameScene)?.ChatLog?.AddMessage(sender, message, type));
+            return Task.CompletedTask;
+        }
+
+        /// <summary>WarpListExtended (C2 0xF5/0x09): Count @5, 44 byte entries from @6: Index @0, LevelRequirement @4,
+        /// Costs @8 (LE int), Name @12 (32). Replaces the data file warps of the warp window.</summary>
+        [PacketHandler(0xF5, 0x09)]
+        public Task HandleWarpListExtendedAsync(Memory<byte> packet)
+        {
+            var span = packet.Span;
+            if (span.Length < 6)
+                return Task.CompletedTask;
+
+            int count = Math.Min(span[5], (span.Length - 6) / 44);
+            var warps = new (int Index, int LevelRequirement, int Costs, string Name)[count];
+            for (int i = 0; i < count; i++)
+            {
+                var e = span.Slice(6 + i * 44, 44);
+                warps[i] = (BinaryPrimitives.ReadUInt16LittleEndian(e), BinaryPrimitives.ReadUInt16LittleEndian(e[4..]),
+                    (int)Math.Min(BinaryPrimitives.ReadUInt32LittleEndian(e[8..]), int.MaxValue), ReadString(e.Slice(12, 32)));
+            }
+            MuGame.ScheduleOnMainThread(() => Client.Main.Data.MoveCommandDataManager.Instance.SetServerWarpList(warps));
+            return Task.CompletedTask;
+        }
+
+        /// <summary>WarpRequirementsExtended (C2 0xF5/0x0B): Count @5, 8 byte entries from @6: Index @0, MasterLevel @2,
+        /// Resets @4. The warp window greys out warps above the master level; resets are not known to the client.</summary>
+        [PacketHandler(0xF5, 0x0B)]
+        public Task HandleWarpRequirementsExtendedAsync(Memory<byte> packet)
+        {
+            var span = packet.Span;
+            if (span.Length < 6)
+                return Task.CompletedTask;
+
+            int count = Math.Min(span[5], (span.Length - 6) / 8);
+            var masterLevels = new System.Collections.Generic.Dictionary<int, int>(count);
+            for (int i = 0; i < count; i++)
+            {
+                var e = span.Slice(6 + i * 8, 8);
+                masterLevels[BinaryPrimitives.ReadUInt16LittleEndian(e)] = BinaryPrimitives.ReadUInt16LittleEndian(e[2..]);
+            }
+            MuGame.ScheduleOnMainThread(() => Client.Main.Data.MoveCommandDataManager.Instance.SetServerWarpMasterLevels(masterLevels));
+            return Task.CompletedTask;
+        }
+
+        /// <summary>RoundTripResponse (0xF5/0x0D): Token @4 (LE int). The token is the Environment.TickCount of the request.</summary>
+        [PacketHandler(0xF5, 0x0D)]
+        public Task HandleRoundTripResponseAsync(Memory<byte> packet)
+        {
+            if (packet.Length < 8)
+                return Task.CompletedTask;
+
+            // ponytail: no RoundTripRequest is sent yet (the ping label uses ICMP); a sender must put TickCount in the token.
+            int elapsed = unchecked(Environment.TickCount - BinaryPrimitives.ReadInt32LittleEndian(packet.Span[4..]));
+            if (elapsed is >= 0 and < 60_000)
+                _characterState.LastRoundTripMilliseconds = elapsed;
+            return Task.CompletedTask;
+        }
+
         private static void ShowSystemMessage(string text, MessageType type)
         {
             MuGame.ScheduleOnMainThread(() =>

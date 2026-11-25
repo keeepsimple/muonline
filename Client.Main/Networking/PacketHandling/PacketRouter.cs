@@ -39,15 +39,22 @@ namespace Client.Main.Networking.PacketHandling
         private readonly ConnectServerHandler _connectServerHandler;
         private readonly MiscGamePacketHandler _miscGamePacketHandler;
         private readonly LegacyQuestHandler _legacyQuestHandler;
+        private readonly QuestHandler _questHandler;
         private readonly PartyHandler _partyHandler;
         private readonly ShopHandler _shopHandler;
         private readonly TradeHandler _tradeHandler;
         private readonly BloodCastleHandler _bloodCastleHandler;
         private readonly MiniGameHandler _miniGameHandler;
+        private readonly InstancedEventHandler _instancedEventHandler;
         private readonly GuildHandler _guildHandler;
+        private readonly GensHandler _gensHandler;
         private readonly MessengerHandler _messengerHandler;
         private readonly GameplayHandler _gameplayHandler;
         private readonly PetHandler _petHandler;
+        private readonly CastleSiegeHandler _castleSiegeHandler;
+        private readonly MuHelperHandler _muHelperHandler;
+        private readonly EventZoneHandler _eventZoneHandler;
+        private readonly CashShopHandler _cashShopHandler;
         private readonly BuffManager _buffManager;
 
         private readonly Dictionary<(byte MainCode, byte SubCode), Func<Memory<byte>, Task>> _packetHandlers
@@ -95,15 +102,22 @@ namespace Client.Main.Networking.PacketHandling
             _connectServerHandler = new ConnectServerHandler(loggerFactory, networkManager);
             _miscGamePacketHandler = new MiscGamePacketHandler(loggerFactory, networkManager, characterService, characterState, scopeManager, targetVersion);
             _legacyQuestHandler = new LegacyQuestHandler(loggerFactory, characterState, characterService);
+            _questHandler = new QuestHandler(loggerFactory, characterService);
             _partyHandler = new PartyHandler(loggerFactory, partyManager, characterService, scopeManager, characterState);
             _shopHandler = new ShopHandler(loggerFactory, characterState, networkManager, targetVersion);
             _tradeHandler = new TradeHandler(loggerFactory, characterState, networkManager, targetVersion);
             _bloodCastleHandler = new BloodCastleHandler(loggerFactory, characterState, networkManager);
             _miniGameHandler = new MiniGameHandler(loggerFactory, characterState, characterService);
+            _instancedEventHandler = new InstancedEventHandler(characterState);
             _guildHandler = new GuildHandler(loggerFactory, characterState, characterService, networkManager);
+            _gensHandler = new GensHandler(loggerFactory, networkManager);
             _messengerHandler = new MessengerHandler(loggerFactory, characterService, networkManager);
             _gameplayHandler = new GameplayHandler(loggerFactory, characterState, targetVersion);
             _petHandler = new PetHandler(loggerFactory);
+            _castleSiegeHandler = new CastleSiegeHandler(loggerFactory, networkManager.GetCastleSiegeManager());
+            _muHelperHandler = new MuHelperHandler(loggerFactory, characterState);
+            _eventZoneHandler = new EventZoneHandler();
+            _cashShopHandler = new CashShopHandler(loggerFactory, networkManager);
 
             RegisterAttributeBasedHandlers();
             RegisterConnectServerHandlers();
@@ -167,6 +181,11 @@ namespace Client.Main.Networking.PacketHandling
                 _characterState?.ResetAfterDisconnect();
                 _networkManager?.GetGuildManager()?.Reset();
                 _networkManager?.GetFriendManager()?.Reset();
+                _networkManager?.GetPartyManager()?.ClearParty();
+                _networkManager?.GetScopeManager()?.ClearScope(clearSelf: true);
+                _networkManager?.GetCharacterService()?.ResetAfterDisconnect();
+                // State the game thread reads goes into NetworkManager.ScheduleSessionReset (main thread), not here.
+                _networkManager?.ScheduleSessionReset();
             }
 
             return Task.CompletedTask;
@@ -270,15 +289,22 @@ namespace Client.Main.Networking.PacketHandling
                 _chatMessageHandler,
                 _miscGamePacketHandler,
                 _legacyQuestHandler,
+                _questHandler,
                 _partyHandler,
                 _shopHandler,
                 _tradeHandler,
                 _bloodCastleHandler,
                 _miniGameHandler,
+                _instancedEventHandler,
                 _guildHandler,
+                _gensHandler,
                 _messengerHandler,
                 _gameplayHandler,
-                _petHandler
+                _petHandler,
+                _castleSiegeHandler,
+                _muHelperHandler,
+                _eventZoneHandler,
+                _cashShopHandler
             };
 
             int registered = 0;

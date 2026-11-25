@@ -586,6 +586,23 @@ namespace Client.Main.Networking.Services
                 return length;
             });
 
+        /// <summary>Starts (<paramref name="pause"/> false) or stops the MU Helper (0xBF 0x51); answered by MuHelperStatusUpdate.</summary>
+        public Task<bool> SendMuHelperStatusChangeAsync(bool pause)
+            => SendSimplePacketAsync($"MU Helper status change (pause={pause})", () =>
+            {
+                new MuHelperStatusChangeRequest(GetClearedPacketMemory(MuHelperStatusChangeRequest.Length)).PauseStatus = pause;
+                return MuHelperStatusChangeRequest.Length;
+            });
+
+        /// <summary>Saves the 257-byte MU Helper configuration (0xAE); the server echoes it with MuHelperConfigurationData.</summary>
+        public Task<bool> SendMuHelperSaveDataAsync(byte[] data)
+            => SendSimplePacketAsync("MU Helper configuration", () =>
+            {
+                var packet = new MuHelperSaveDataRequest(GetClearedPacketMemory(MuHelperSaveDataRequest.Length));
+                data.AsSpan(0, Math.Min(data.Length, packet.HelperData.Length)).CopyTo(packet.HelperData);
+                return MuHelperSaveDataRequest.Length;
+            });
+
         /// <summary>Requests name and mark of a guild that is not cached yet (0x66).</summary>
         public Task<bool> SendGuildInfoRequestAsync(uint guildId)
             => SendSimplePacketAsync($"guild info request ({guildId})", () =>
@@ -601,6 +618,38 @@ namespace Client.Main.Networking.Services
             {
                 _ = new GuildListRequest(GetClearedPacketMemory(GuildListRequest.Length));
                 return GuildListRequest.Length;
+            });
+
+        /// <summary>Requests to join a gens at the opened gens NPC (0xF8 01).</summary>
+        public Task<bool> SendGensJoinRequestAsync(GensType gens)
+            => SendSimplePacketAsync("gens join request", () =>
+            {
+                new GensJoinRequest(GetClearedPacketMemory(GensJoinRequest.Length)).GensType = gens;
+                return GensJoinRequest.Length;
+            });
+
+        /// <summary>Requests to leave the gens at the opened gens NPC (0xF8 03).</summary>
+        public Task<bool> SendGensLeaveRequestAsync()
+            => SendSimplePacketAsync("gens leave request", () =>
+            {
+                _ = new GensLeaveRequest(GetClearedPacketMemory(GensLeaveRequest.Length));
+                return GensLeaveRequest.Length;
+            });
+
+        /// <summary>Requests the ranking reward at the opened gens NPC (0xF8 09).</summary>
+        public Task<bool> SendGensRewardRequestAsync(GensType gens)
+            => SendSimplePacketAsync("gens reward request", () =>
+            {
+                new GensRewardRequest(GetClearedPacketMemory(GensRewardRequest.Length)).GensType = gens;
+                return GensRewardRequest.Length;
+            });
+
+        /// <summary>Requests the own gens info (0xF8 0B); OpenMU answers with GensInfo (0xF8 07).</summary>
+        public Task<bool> SendGensRankingRequestAsync()
+            => SendSimplePacketAsync("gens ranking request", () =>
+            {
+                _ = new GensRankingRequest(GetClearedPacketMemory(GensRankingRequest.Length));
+                return GensRankingRequest.Length;
             });
 
         /// <summary>
@@ -643,6 +692,39 @@ namespace Client.Main.Networking.Services
                 _ = new CancelGuildCreation(GetClearedPacketMemory(CancelGuildCreation.Length));
                 return CancelGuildCreation.Length;
             });
+
+        /// <summary>Answers a guild war / battle soccer request of another guild master (0x61).</summary>
+        public Task<bool> SendGuildWarResponseAsync(bool accepted)
+            => SendSimplePacketAsync("guild war response", () =>
+            {
+                new GuildWarResponse(GetClearedPacketMemory(GuildWarResponse.Length)).Accepted = accepted;
+                return GuildWarResponse.Length;
+            });
+
+        public const int GuildRelationshipChangeResponseLength = 8;
+
+        /// <summary>Answers an alliance / hostility request (0xE6); type values must echo the request (0xE5).</summary>
+        public Task<bool> SendGuildRelationshipChangeResponseAsync(byte relationshipType, byte requestType, bool accepted, ushort targetPlayerId)
+            => SendSimplePacketAsync("guild relationship response", () =>
+            {
+                WriteGuildRelationshipChangeResponse(GetClearedPacketMemory(GuildRelationshipChangeResponseLength).Span,
+                    relationshipType, requestType, accepted, targetPlayerId);
+                return GuildRelationshipChangeResponseLength;
+            });
+
+        /// <summary>
+        /// Written by hand: the OpenMU 0.9.8 struct writes TargetPlayerId little endian, the server definition is ShortBigEndian.
+        /// </summary>
+        public static void WriteGuildRelationshipChangeResponse(Span<byte> packet, byte relationshipType, byte requestType, bool accepted, ushort targetPlayerId)
+        {
+            packet[0] = 0xC1;
+            packet[1] = GuildRelationshipChangeResponseLength;
+            packet[2] = 0xE6;
+            packet[3] = relationshipType;
+            packet[4] = requestType;
+            packet[5] = (byte)(accepted ? 1 : 0);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(packet[6..], targetPlayerId);
+        }
 
         /// <summary>
         /// Requests the item list of another player's personal store.
@@ -1311,6 +1393,9 @@ namespace Client.Main.Networking.Services
         /// </summary>
         public bool IsNpcDialogOpen => _npcDialogOpen;
 
+        /// <summary>Forgets session state that cannot survive a dropped connection.</summary>
+        public void ResetAfterDisconnect() => _npcDialogOpen = false;
+
         /// <summary>
         /// Sends a talk-to-NPC request to the server for the specified NPC network id (masked).
         /// </summary>
@@ -1434,6 +1519,49 @@ namespace Client.Main.Networking.Services
                 _logger.LogError(ex, "Error sending LegacyQuestStateRequest (0xA0).");
             }
         }
+
+        // ───────────────────── Season 6 quest system (C1 F6) ─────────────────────
+
+        /// <summary>AvailableQuestsRequest (F6 30): asks the opened quest NPC for its quests, answered by AvailableQuests (F6 0A).</summary>
+        public Task<bool> SendAvailableQuestsRequestAsync()
+            => SendSimplePacketAsync("AvailableQuestsRequest (F6 30)", () =>
+            {
+                _ = new AvailableQuestsRequest(GetClearedPacketMemory(AvailableQuestsRequest.Length));
+                return AvailableQuestsRequest.Length;
+            });
+
+        /// <summary>QuestSelectRequest (F6 0A): the player picked a quest (its starting number) from the NPC quest list.</summary>
+        public Task<bool> SendQuestSelectRequestAsync(ushort questNumber, ushort questGroup)
+            => SendSimplePacketAsync($"QuestSelectRequest (F6 0A) {questGroup}/{questNumber}", () =>
+            {
+                var packet = new QuestSelectRequest(GetClearedPacketMemory(QuestSelectRequest.Length));
+                packet.QuestNumber = questNumber;
+                packet.QuestGroup = questGroup;
+                return QuestSelectRequest.Length;
+            });
+
+        /// <summary>QuestProceedRequest (F6 0B): accepts or refuses the quest whose starting step is shown.</summary>
+        public Task<bool> SendQuestProceedRequestAsync(ushort questNumber, ushort questGroup, bool accept)
+            => SendSimplePacketAsync($"QuestProceedRequest (F6 0B) {questGroup}/{questNumber} accept={accept}", () =>
+            {
+                var packet = new QuestProceedRequest(GetClearedPacketMemory(QuestProceedRequest.Length));
+                packet.QuestNumber = questNumber;
+                packet.QuestGroup = questGroup;
+                packet.ProceedAction = accept
+                    ? QuestProceedRequest.QuestProceedAction.AcceptQuest
+                    : QuestProceedRequest.QuestProceedAction.RefuseQuest;
+                return QuestProceedRequest.Length;
+            });
+
+        /// <summary>QuestCompletionRequest (F6 0D): hands in the active quest of the group.</summary>
+        public Task<bool> SendQuestCompletionRequestAsync(ushort questNumber, ushort questGroup)
+            => SendSimplePacketAsync($"QuestCompletionRequest (F6 0D) {questGroup}/{questNumber}", () =>
+            {
+                var packet = new QuestCompletionRequest(GetClearedPacketMemory(QuestCompletionRequest.Length));
+                packet.QuestNumber = questNumber;
+                packet.QuestGroup = questGroup;
+                return QuestCompletionRequest.Length;
+            });
 
         /// <summary>
         /// Sends a legacy quest progress request (C1 A2). SourceMain5.2 sends NewState=1 for progression.
@@ -1843,6 +1971,42 @@ namespace Client.Main.Networking.Services
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error sending enter gate request for gate {GateId}.", gateId);
+            }
+        }
+
+        /// <summary>Sends KanturuEnterRequest (0xD1/0x01) from the Gateway Machine dialog.</summary>
+        public async Task SendKanturuEnterRequestAsync()
+        {
+            if (!_connectionManager.IsConnected) return;
+            try
+            {
+                await _connectionManager.Connection.SendAsync(() =>
+                {
+                    _ = new KanturuEnterRequest(_connectionManager.Connection.Output.GetMemory(KanturuEnterRequest.Length).Slice(0, KanturuEnterRequest.Length));
+                    return KanturuEnterRequest.Length;
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error sending Kanturu enter request.");
+            }
+        }
+
+        /// <summary>Sends CrywolfChaosRateBenefitRequest (0xBD/0x09); the server answers with the chaos rate benefit of the Crywolf result.</summary>
+        public async Task SendCrywolfChaosRateBenefitRequestAsync()
+        {
+            if (!_connectionManager.IsConnected) return;
+            try
+            {
+                await _connectionManager.Connection.SendAsync(() =>
+                {
+                    _ = new CrywolfChaosRateBenefitRequest(_connectionManager.Connection.Output.GetMemory(CrywolfChaosRateBenefitRequest.Length).Slice(0, CrywolfChaosRateBenefitRequest.Length));
+                    return CrywolfChaosRateBenefitRequest.Length;
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error sending Crywolf chaos rate benefit request.");
             }
         }
 

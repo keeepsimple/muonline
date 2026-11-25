@@ -7,6 +7,8 @@ namespace Client.Main.Models
         public string DisplayName;
         public int RequiredLevel;
         public int RequiredZen;
+        /// <summary>Minimum master level from WarpRequirementsExtended (0xF5 0B), 0 = none.</summary>
+        public int RequiredMasterLevel;
         public bool CanMove;
         public bool IsSelected;
         public bool IsStrifeMap;
