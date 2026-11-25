@@ -1337,22 +1337,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             return Task.CompletedTask;
         }
 
-        [PacketHandler(0xF6, 0x1A)]             // QuestStateList
-        public Task HandleQuestStateListAsync(Memory<byte> packet)
-        {
-            try
-            {
-                var qState = new QuestStateList(packet);
-                _logger.LogInformation(
-                    "Quest state list: {Count} entries",
-                    qState.QuestCount);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error parsing QuestStateList packet.");
-            }
-            return Task.CompletedTask;
-        }
+        // QuestStateList (F6 1A) is handled by QuestHandler.
 
         // ────────────────────────── Helpers ────────────────────────────
 

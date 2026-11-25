@@ -1,6 +1,7 @@
 #nullable enable
 using System.Collections.Generic;
 using System.Linq;
+using Client.Main.Core.Utilities;
 using MUnique.OpenMU.Network.Packets.ServerToClient;
 
 namespace Client.Main.Core.Client
@@ -44,5 +45,47 @@ namespace Client.Main.Core.Client
 
         /// <summary>Quests of QuestEventResponse (F6 03); the original client's use of them is unknown.</summary>
         public List<QuestId> EventQuests { get; } = new();
+
+        /// <summary>Clears all state; the server resends it after entering the game (character switch, reconnect).</summary>
+        public void Reset()
+        {
+            ActiveQuests.Clear();
+            AvailableQuestsNpc = 0;
+            AvailableQuests.Clear();
+            SelectedQuest = null;
+            LastStepByGroup.Clear();
+            EventQuests.Clear();
+        }
+
+        public static string ConditionText(Condition c) => c.Type switch
+        {
+            ConditionType.MonsterKills => $"Kill {NpcDatabase.GetNpcName(c.RequirementId)}",
+            ConditionType.Item => $"Bring {ItemName(c.RequirementId)}",
+            _ => c.Type.ToString(),
+        };
+
+        public static string RewardText(Reward r) => r.Type switch
+        {
+            RewardType.Experience => $"{r.Count:N0} Exp",
+            RewardType.Money => $"{r.Count:N0} Zen",
+            RewardType.Item => r.Count > 1 ? $"{ItemName(r.RewardId)} x{r.Count}" : ItemName(r.RewardId),
+            RewardType.GensContribution => $"{r.Count} gens contribution",
+            _ => $"{r.Type} {r.Count}",
+        };
+
+        /// <summary>OpenMU item type: group &lt;&lt; 9 | number.</summary>
+        public static string ItemName(ushort itemType)
+        {
+            byte group = (byte)(itemType >> 9);
+            short number = (short)(itemType & 0x1FF);
+            try
+            {
+                return ItemDatabase.GetItemName(group, number) ?? $"item {group}/{number}";
+            }
+            catch (System.Exception)
+            {
+                return $"item {group}/{number}";
+            }
+        }
     }
 }

@@ -94,6 +94,7 @@ namespace Client.Main.Networking
         public PartyManager GetPartyManager() => _partyManager;
         public GuildManager GetGuildManager() => _guildManager;
         public GensManager GetGensManager() => _gensManager;
+        public Core.Client.QuestLog GetQuestLog() => _packetRouter.QuestLog;
         public CastleSiegeManager GetCastleSiegeManager() => _castleSiegeManager;
         public CastleSiegeService GetCastleSiegeService() => _castleSiegeService;
         public Core.Client.CashShop.CashShopManager GetCashShopManager() => _cashShopManager;
@@ -702,6 +703,7 @@ namespace Client.Main.Networking
         internal void ScheduleSessionReset() => MuGame.ScheduleOnMainThread(() =>
         {
             _gensManager.Reset();
+            _packetRouter.QuestLog.Reset();
             _cashShopManager.Reset();
             _castleSiegeManager.Reset();
             KanturuEventState.Reset();

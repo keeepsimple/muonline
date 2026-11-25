@@ -47,6 +47,38 @@ namespace Client.Main.Networking.Services
 
         private const byte FirstBackpackSlot = 12;
 
+        /// <summary>Rebuilds a destroyed gate or statue (0xB2/0x05, owner guild master or assistant).</summary>
+        public Task<bool> SendDefenseBuyAsync(uint npcNumber, uint npcIndex)
+            => SendPacketAsync("castle siege defense buy", BuildDefenseBuyPacket(npcNumber, npcIndex));
+
+        public static byte[] BuildDefenseBuyPacket(uint npcNumber, uint npcIndex)
+        {
+            var body = new byte[8];
+            BinaryPrimitives.WriteUInt32LittleEndian(body, npcNumber);
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), npcIndex);
+            return BuildPacket(0xB2, 0x05, body);
+        }
+
+        /// <summary>Upgrades a gate or statue to the given level (0xB2/0x07): type 1 = defense, 2 = regeneration, 3 = max HP.</summary>
+        public Task<bool> SendDefenseUpgradeAsync(uint npcNumber, uint npcIndex, uint upgradeType, uint level)
+            => SendPacketAsync("castle siege defense upgrade", BuildDefenseUpgradePacket(npcNumber, npcIndex, upgradeType, level));
+
+        public static byte[] BuildDefenseUpgradePacket(uint npcNumber, uint npcIndex, uint upgradeType, uint level)
+        {
+            var body = new byte[16];
+            BinaryPrimitives.WriteUInt32LittleEndian(body, npcNumber);
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(4), npcIndex);
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(8), upgradeType);
+            BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(12), level);
+            return BuildPacket(0xB2, 0x07, body);
+        }
+
+        /// <summary>Opens or closes the Land of Trials to the public (0xB2/0x1F, owner guild master).</summary>
+        public Task<bool> SendHuntZoneEntranceSettingAsync(bool isPublic)
+            => SendPacketAsync("castle siege hunting zone entrance setting", BuildHuntZoneEntranceSettingPacket(isPublic));
+
+        public static byte[] BuildHuntZoneEntranceSettingPacket(bool isPublic) => BuildPacket(0xB2, 0x1F, new[] { isPublic ? (byte)1 : (byte)0 });
+
         /// <summary>Repairs a gate or statue (0xB2/0x06, castle owner).</summary>
         public Task<bool> SendDefenseRepairAsync(uint npcNumber, uint npcIndex)
         {
@@ -61,11 +93,14 @@ namespace Client.Main.Networking.Services
 
         /// <summary>Changes a tax rate (0xB2/0x09): type 1 = Chaos Machine, 2 = Store (0-3 %), 3 = hunting zone fee.</summary>
         public Task<bool> SendTaxChangeAsync(byte taxType, uint value)
+            => SendPacketAsync("castle siege tax change", BuildTaxChangePacket(taxType, value));
+
+        public static byte[] BuildTaxChangePacket(byte taxType, uint value)
         {
             var body = new byte[5];
             body[0] = taxType;
             BinaryPrimitives.WriteUInt32BigEndian(body.AsSpan(1), value);
-            return SendAsync("castle siege tax change", 0xB2, 0x09, body);
+            return BuildPacket(0xB2, 0x09, body);
         }
 
         /// <summary>Withdraws Zen from the castle treasury (0xB2/0x10).</summary>

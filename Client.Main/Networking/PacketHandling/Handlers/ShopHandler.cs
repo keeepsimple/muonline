@@ -293,13 +293,24 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 {
                     MuGame.ScheduleOnMainThread(() => Client.Main.Controls.UI.Game.CastleSiege.CastleSiegeWindow.Instance.Show());
                 }
+                else if (resp.Window == NpcWindowResponse.NpcWindow.LugardDoppelgangerEntry)
+                {
+                    // The byte after the window is the minutes until the entrance opens.
+                    byte minutes = packet.Length > 4 ? packet.Span[4] : (byte)0;
+                    MuGame.ScheduleOnMainThread(() => DoppelgangerEnterControl.Instance.ShowEntry(minutes));
+                }
+                else if (resp.Window == NpcWindowResponse.NpcWindow.IllusionTemple)
+                {
+                    MuGame.ScheduleOnMainThread(() => CursedTempleEnterControl.Instance.Show());
+                }
+                else if (resp.Window == NpcWindowResponse.NpcWindow.DelgadoLuckyCoinRegistration)
+                {
+                    MuGame.ScheduleOnMainThread(() => DelgadoLuckyCoinWindow.Instance.Open());
+                }
                 else
                 {
-                    // e.g. IllusionTemple, LugardDoppelgangerEntry, JerintGaionEvententry,
-                    // Lahap – the NPC talk succeeded but the client has no window for it yet.
+                    // e.g. JerintGaionEvententry, Lahap – the NPC talk succeeded but the client has no window for it yet.
                     _logger.LogInformation("NPC window {Window} ({Id}) has no client UI yet; closing the NPC dialog.", resp.Window, (byte)resp.Window);
-                    if (resp.Window == NpcWindowResponse.NpcWindow.IllusionTemple)
-                        MuGame.ScheduleOnMainThread(() => RequestDialog.ShowInfo("Illusion Temple is not available on this server yet."));
                     // The server is now in NpcDialogOpened and rejects talking to other NPCs until the dialog is
                     // closed. The original client sends CloseNpcRequest from every NPC window's ClosingProcess.
                     _ = MuGame.Network?.GetCharacterService()?.SendCloseNpcRequestAsync();

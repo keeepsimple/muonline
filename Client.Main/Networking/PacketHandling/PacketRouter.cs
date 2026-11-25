@@ -70,6 +70,7 @@ namespace Client.Main.Networking.PacketHandling
         public TargetProtocolVersion TargetVersion { get; }
 
         public BuffManager BuffManager => _buffManager;
+        public Core.Client.QuestLog QuestLog => _questHandler.Quests;
 
         public void UpdateBuffs() => _buffManager.Update();
 

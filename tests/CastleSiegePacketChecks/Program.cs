@@ -12,7 +12,10 @@ using Client.Main.Networking;
 using Client.Main.Networking.PacketHandling;
 using Microsoft.Extensions.Logging.Abstractions;
 using static Client.Main.Core.Client.CastleSiegeManager;
+using static Client.Main.Controls.UI.Game.CastleSiege.CastleSiegeSeniorWindow;
 
+// Display strings use the current culture's grouping; checks expect "4,500,000".
+System.Globalization.CultureInfo.DefaultThreadCurrentCulture = System.Globalization.CultureInfo.CurrentCulture = System.Globalization.CultureInfo.InvariantCulture;
 var logs = NullLoggerFactory.Instance;
 var settings = new MuOnlineSettings { ProtocolVersion = "Season6" };
 var state = new CharacterState(logs) { Id = 0x0042, Name = "Tester" };
@@ -189,6 +192,64 @@ Check(siege.Side == JoinSide.None && siege.Switches.Count == 0 && siege.CrownAcc
 // Outgoing B2/04: inventory slot 20 (backpack index 8) goes out as ItemIndex 8, OpenMU adds the 12 equipment slots back.
 var mark = Client.Main.Networking.Services.CastleSiegeService.BuildMarkRegistrationPacket(20);
 Check(mark.SequenceEqual(new byte[] { 0xC1, 5, 0xB2, 0x04, 8 }), "B2/04 mark registration sends the backpack index", Convert.ToHexString(mark));
+
+// Senior window: outgoing B2/05, B2/07, B2/1F, B2/09 (hunting zone fee).
+var buyReq = Client.Main.Networking.Services.CastleSiegeService.BuildDefenseBuyPacket(283, 5);
+Check(buyReq.SequenceEqual(new byte[] { 0xC1, 12, 0xB2, 0x05, 0x1B, 0x01, 0, 0, 5, 0, 0, 0 }), "B2/05 defense buy request", Convert.ToHexString(buyReq));
+var upReq = Client.Main.Networking.Services.CastleSiegeService.BuildDefenseUpgradePacket(277, 3, 3, 2);
+Check(upReq.SequenceEqual(new byte[] { 0xC1, 20, 0xB2, 0x07, 0x15, 0x01, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 2, 0, 0, 0 }), "B2/07 defense upgrade request", Convert.ToHexString(upReq));
+var pubReq = Client.Main.Networking.Services.CastleSiegeService.BuildHuntZoneEntranceSettingPacket(true);
+Check(pubReq.SequenceEqual(new byte[] { 0xC1, 5, 0xB2, 0x1F, 1 }), "B2/1F public access request", Convert.ToHexString(pubReq));
+var feeReq = Client.Main.Networking.Services.CastleSiegeService.BuildTaxChangePacket(3, 120_000);
+Check(feeReq.SequenceEqual(new byte[] { 0xC1, 9, 0xB2, 0x09, 3, 0x00, 0x01, 0xD4, 0xC0 }), "B2/09 hunting zone fee request", Convert.ToHexString(feeReq));
+
+// Costs (OpenMU CastleSiegeInitializer defaults), life level derived from the max HP.
+var gate = new DefenseNpc(277, 3, 2, 0, 2_500_000, 2_000_000, 81, 92, true);
+Check(GetBuyPrice(277) == 9_500_000 && GetBuyPrice(283) == 4_500_000, "buy prices");
+Check(GetNextUpgrade(gate, UpgradeType.Defense) == new UpgradeLevel(3, 4, 3_000_000, 520), "gate defense 2 -> 3 costs 4 jewels, 3,000,000 Zen");
+Check(GetLevel(gate, UpgradeType.Life) == 1 && GetNextUpgrade(gate, UpgradeType.Life) == new UpgradeLevel(2, 3, 1_000_000, 3_500_000), "gate life level from max HP and next cost");
+Check(GetNextUpgrade(gate, UpgradeType.Regeneration) == null && GetNextUpgrade(gate with { DefenseLevel = 3 }, UpgradeType.Defense) == null
+      && GetNextUpgrade(gate with { IsAlive = false }, UpgradeType.Life) == null, "no gate regeneration, no level past 3, no upgrade when destroyed");
+
+// Permission: buy/upgrade master or assistant, Land of Trials master only, own guild must own the castle.
+var gm = MUnique.OpenMU.Network.Packets.ServerToClient.GuildMemberRole.GuildMaster;
+var assistant = (MUnique.OpenMU.Network.Packets.ServerToClient.GuildMemberRole)64;
+var bm = MUnique.OpenMU.Network.Packets.ServerToClient.GuildMemberRole.BattleMaster;
+Check(IsOwnerOfficer("Lords", gm, "Lords", true) && IsOwnerOfficer("Lords", assistant, "Lords", false) && !IsOwnerOfficer("Lords", assistant, "Lords", true)
+      && !IsOwnerOfficer("Lords", bm, "Lords", false) && !IsOwnerOfficer("Wolves", gm, "Lords", false) && !IsOwnerOfficer(null, gm, "", false),
+    "owner permission checks");
+
+// The Senior's view model follows the response packets.
+var statues = C2List(0xB3, 28, 1);
+BinaryPrimitives.WriteUInt32LittleEndian(statues.AsSpan(12), 283); BinaryPrimitives.WriteUInt32LittleEndian(statues.AsSpan(16), 5);
+await Route(statues);
+var statue = siege.DefenseNpcs[0];
+Check(PrimaryActionLabel(statue) == "BUY" && BuyPrompt(statue) == "Build Statue #5 for 4,500,000 Zen?" && UpgradeLabel(statue, UpgradeType.Defense) == "DEF -",
+    "destroyed statue offers buy", $"{PrimaryActionLabel(statue)} / {BuyPrompt(statue)} / {UpgradeLabel(statue, UpgradeType.Defense)}");
+var bought = C1(16, 0xB2, 0x05); bought[4] = 1;
+BinaryPrimitives.WriteUInt32LittleEndian(bought.AsSpan(8), 283); BinaryPrimitives.WriteUInt32LittleEndian(bought.AsSpan(12), 5);
+await Route(bought);
+statue = siege.DefenseNpcs[0] with { MaxHp = 1_500_000 }; // the re-requested list brings the HP
+Check(PrimaryActionLabel(statue) == "REPAIR" && UpgradeLabel(statue, UpgradeType.Regeneration) == "REGEN Lv1",
+    "bought statue offers repair and upgrades", $"{PrimaryActionLabel(statue)} / {UpgradeLabel(statue, UpgradeType.Regeneration)}");
+var regen = C1(24, 0xB2, 0x07); regen[4] = 1;
+BinaryPrimitives.WriteUInt32LittleEndian(regen.AsSpan(8), 283); BinaryPrimitives.WriteUInt32LittleEndian(regen.AsSpan(12), 5);
+BinaryPrimitives.WriteUInt32LittleEndian(regen.AsSpan(16), 2); BinaryPrimitives.WriteUInt32LittleEndian(regen.AsSpan(20), 1);
+await Route(regen);
+statue = siege.DefenseNpcs[0];
+Check(UpgradeLabel(statue, UpgradeType.Regeneration) == "REGEN Lv2"
+      && UpgradePrompt(statue, UpgradeType.Regeneration) == "Upgrade Statue #5 to level 2 (regeneration 2) for 5,000,000 Zen and 5 Jewel(s) of Guardian?",
+    "B2/07 response advances the next upgrade", UpgradePrompt(statue, UpgradeType.Regeneration) ?? "null");
+
+siege.Reset();
+byte chaosBefore = siege.ChaosTaxRate;
+Check(HuntZoneAccessText(siege) == "-" && HuntZoneFeeText(siege) == "-", "Land of Trials unknown before any response");
+var opened = C1(6, 0xB2, 0x1F); opened[4] = 1; opened[5] = 1;
+await Route(opened);
+var feeSet = C1(10, 0xB2, 0x09); feeSet[4] = 1; feeSet[5] = 3; BinaryPrimitives.WriteUInt32BigEndian(feeSet.AsSpan(6), 120_000);
+await Route(feeSet);
+Check(HuntZoneAccessText(siege) == "Open" && HuntZoneFeeText(siege) == "120,000 Zen" && siege.ChaosTaxRate == chaosBefore,
+    "B2/1F + B2/09 update the Land of Trials view", $"{HuntZoneAccessText(siege)} / {HuntZoneFeeText(siege)}");
 
 Console.WriteLine(failures == 0 ? "Castle Siege packet checks passed." : $"Castle Siege packet checks: {failures} failure(s).");
 return failures == 0 ? 0 : 1;

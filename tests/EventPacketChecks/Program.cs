@@ -14,6 +14,8 @@ using Client.Main.Core.Utilities;
 using Client.Main.Networking;
 using Client.Main.Networking.PacketHandling;
 using Client.Main.Networking.PacketHandling.Handlers;
+using Client.Main.Networking.Services;
+using MUnique.OpenMU.Network.Packets.ServerToClient;
 using Client.Main.Models;
 using Client.Main.Objects;
 using Client.Main.Objects.Monsters;
@@ -922,7 +924,7 @@ Check(!CrywolfEventState.Active && CrywolfEventState.Heroes.Count == 0, "BD/00 E
     }
 
     state.Id = 0x0042;
-    Check(await RouteCounting(C1(0xBF, 0x00, 4)) == 1 && await RouteCounting(C1(0xBF, 0x00, 0)) == 0
+    Check(await RouteCounting(C1(0xBF, 0x00, 4)) == 1
           && await RouteCounting(C1(0xBF, 0x00, 1)) == 0
           && InstancedEventHandler.DescribeIllusionTempleEnter(4) == "The Illusion Temple is full."
           && InstancedEventHandler.DescribeIllusionTempleEnter(7)!.Contains("Player killers"),
@@ -931,13 +933,38 @@ Check(!CrywolfEventState.Active && CrywolfEventState.Heroes.Count == 0, "BD/00 E
           && await RouteCounting(C1(0xBF, 0x02, 0, 0x00, 0xD2, 0, 0x77, 0x00, 0x43, 0x00)) == 0
           && InstancedEventHandler.IllusionTempleSkillName(210) == "Order of Protection",
           "BF/02 reports the own skill usage result only");
+    byte[] NpcWindow(NpcWindowResponse.NpcWindow window, byte extra = 0)
+    {
+        var data = new byte[NpcWindowResponse.Length];
+        _ = new NpcWindowResponse(data) { Window = window };
+        data[4] = extra;
+        return data;
+    }
+
+    var temples = CursedTempleEnterControl.Instance;
+    Check(temples.ButtonText(3) == "TEMPLE 3", "Illusion Temple buttons show no count before BF/03");
+    await Route(NpcWindow(NpcWindowResponse.NpcWindow.IllusionTemple));
+    Check(temples.Visible, "30 IllusionTemple opens the Illusion Temple entry dialog");
     await Route(C1(0xBF, 0x03, 1, 2, 3, 4, 5, 6));
-    Check(InstancedEventHud.Instance.IllusionTempleUserCounts.SequenceEqual(new[] { 1, 2, 3, 4, 5, 6 }), "BF/03 stores the players per temple");
+    Check(temples.ButtonText(1) == "TEMPLE 1 (1)" && temples.ButtonText(6) == "TEMPLE 6 (6)", "BF/03 shows the players per temple in the entry dialog");
+    await Route(C1(0xBF, 0x00, 0));
+    Check(!temples.Visible, "BF/00 success closes the Illusion Temple entry dialog");
     Check(await RouteCounting(C1(0xBF, 0x07, 0x00, 0xD3, 0x42, 0x00)) == 1 && await RouteCounting(C1(0xBF, 0x07, 0x00, 0xD3, 0x50, 0x00)) == 0,
           "BF/07 reports a skill that wore off on the own character");
-    Check(await RouteCounting(C1(0xBF, 0x0E, 2)) == 1 && await RouteCounting(C1(0xBF, 0x0E, 4)) == 0
+    Check(InstancedEventHandler.DescribeDoppelgangerEnter(2)!.Contains("commenced") && InstancedEventHandler.DescribeDoppelgangerEnter(4) == null
           && InstancedEventHandler.DescribeDoppelgangerEnter(3)!.Contains("Outlaw"),
           "BF/0E shows the Doppelganger refusals");
+    var doppel = DoppelgangerEnterControl.Instance;
+    await Route(NpcWindow(NpcWindowResponse.NpcWindow.LugardDoppelgangerEntry, 0));
+    Check(doppel.Visible && !doppel.EnterLocked && doppel.BodyLines[0] == "You may now enter.", "30 LugardDoppelgangerEntry opens the Doppelganger dialog");
+    await Route(NpcWindow(NpcWindowResponse.NpcWindow.LugardDoppelgangerEntry, 5));
+    Check(doppel.EnterLocked && doppel.BodyLines[0].Contains("5 minute"), "30 LugardDoppelgangerEntry minutes lock the entrance");
+    await Route(C1(0xBF, 0x0E, 4));
+    Check(!doppel.EnterLocked, "BF/0E EntranceAvailable unlocks the enter button");
+    await Route(C1(0xBF, 0x0E, 1));
+    Check(doppel.Visible && doppel.EnterLocked, "BF/0E Failed locks the enter button");
+    await Route(C1(0xBF, 0x0E, 0));
+    Check(!doppel.Visible, "BF/0E Success closes the Doppelganger dialog");
 
     await Route(C1(0xBD, 0x03, 1, 0x13, 0x01, 0x3F)); // key 319 = altar 2, contracted with 3 contracts left
     Check(CrywolfEventState.IsAltarContracted(2) && CrywolfEventState.AltarContractsLeft(2) == 3, "BD/03 updates the contracted altar");
@@ -951,20 +978,54 @@ Check(!CrywolfEventState.Active && CrywolfEventState.Heroes.Count == 0, "BD/00 E
     Check(RaklionEventState.State == 5 && RaklionEventState.SelupanState == 9, "D1/12 DetailState only changes the Selupan state");
     await Route(C1(0xD1, 0x13, 1));
     Check(RaklionEventState.LastBattleSuccess == true, "D1/13 stores the Selupan battle result");
+    var zoneHud = EventZoneHudControl.Instance;
+    zoneHud.BuildLines(RaklionEventState.HatcheryMapId);
+    Check(zoneHud.Lines.Select(l => l.Text).SequenceEqual(new[] { "RAKLION", "Battle against Selupan", "Selupan: dead", "Selupan defeated" }),
+          "Raklion HUD shows event state, Selupan state and battle result", string.Join(" | ", zoneHud.Lines.Select(l => l.Text)));
+    zoneHud.BuildLines(0);
+    Check(zoneHud.Lines.Count == 0, "Raklion HUD is hidden outside the Raklion maps");
     await Route(C1(0xD1, 0x11, 10, 0));
     Check(RaklionEventState.State == 10 && RaklionEventState.SelupanState == 0 && RaklionEventState.LastBattleSuccess == null,
           "D1/11 End resets the Raklion battle");
 
+    var delgado = DelgadoLuckyCoinWindow.Instance;
+    await Route(NpcWindow(NpcWindowResponse.NpcWindow.DelgadoLuckyCoinRegistration));
+    Check(delgado.Visible && delgado.StatusText == null, "30 DelgadoLuckyCoinRegistration opens the Lucky Coin dialog");
     await Route(C1(0xBF, 0x0B, 7, 0, 0, 0));
+    Check(delgado.BodyLines[0] == "Registered Lucky Coins: 7", "BF/0B shows the registered Lucky Coins in the dialog");
     Check(EventItemState.LuckyCoinsRegistered == 7, "BF/0B stores the registered Lucky Coins");
     await Route(C1(0xBF, 0x0C, 1, 0, 0, 0, 8, 0, 0, 0));
     Check(EventItemState.LuckyCoinsRegistered == 8 && EventZoneHandler.DescribeLuckyCoinRegistration(100, 0).Contains("already"),
           "BF/0C LuckyCoinRegistrationResponse updates the count");
+    Check(delgado.BodyLines[0] == "Registered Lucky Coins: 8" && delgado.StatusText!.Contains("was registered"),
+          "BF/0C shows the registration result in the dialog");
     Check(await RouteCounting(C1(0xBF, 0x0D, 2)) == 1 && EventZoneHandler.DescribeLuckyCoinExchange(2).Contains("2 x 4"),
           "BF/0D LuckyCoinExchangeResponse explains the result");
     await Route(C1(0x94, 0, 25, 0, 0, 0, 4, 0, 0xFF, 0xFF, 0xFF, 0xFF));
     await Route(C1(0x94, 0)); // truncated
     Check(EventItemState.EventChipsRegistered == 25 && EventItemState.EventChipsInInventory == 4, "94 stores the Golden Archer counts");
+    var archer = GoldenArcherWindow.Instance;
+    Check(archer.Visible && archer.StatusText == null && archer.BodyLines[0] == "Registered: 25" && archer.BodyLines[1] == "In your inventory: 4",
+          "94 opens the Golden Archer dialog with the counts");
+    await Route(C1(0x94, 1, 25, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF));
+    Check(archer.StatusText == "You have no item to register.", "94 missing item shows in the Golden Archer dialog");
+
+    byte[] Written(int length, Func<byte[], int> write)
+    {
+        var data = new byte[length];
+        return data[..write(data)];
+    }
+    Check(Written(8, d => CharacterService.WriteDoppelgangerEnterRequest(d, 0xFF)).SequenceEqual(new byte[] { 0xC1, 5, 0xBF, 0x0E, 0xFF }),
+          "DoppelgangerEnterRequest bytes");
+    Check(Written(8, d => CharacterService.WriteIllusionTempleEnterRequest(d, 3, 0xFF)).SequenceEqual(new byte[] { 0xC1, 6, 0xBF, 0x00, 3, 0xFF }),
+          "IllusionTempleEnterRequest bytes");
+    Check(Written(8, d => CharacterService.WriteLuckyCoinCountRequest(d)).SequenceEqual(new byte[] { 0xC1, 4, 0xBF, 0x0B })
+          && Written(8, d => CharacterService.WriteLuckyCoinRegistrationRequest(d)).SequenceEqual(new byte[] { 0xC1, 4, 0xBF, 0x0C }),
+          "LuckyCoinCount/RegistrationRequest bytes");
+    Check(Written(8, d => CharacterService.WriteLuckyCoinExchangeRequest(d, DelgadoLuckyCoinWindow.ExchangeTiers[2])).SequenceEqual(new byte[] { 0xC1, 8, 0xBF, 0x0D, 30, 0, 0, 0 }),
+          "LuckyCoinExchangeRequest bytes (30 coins)");
+    Check(Written(8, d => CharacterService.WriteEventChipRegistrationRequest(d)).SequenceEqual(new byte[] { 0xC1, 5, 0x95, 0, 0 }),
+          "EventChipRegistrationRequest bytes");
 
     var mine = new HashSet<(byte, byte)> { (0xBF, 0x00), (0xBF, 0x02), (0xBF, 0x03), (0xBF, 0x07), (0xBF, 0x0E), (0xBD, 0x03), (0xBD, 0x0C),
         (0xD1, 0x06), (0xD1, 0x10), (0xD1, 0x11), (0xD1, 0x12), (0xD1, 0x13), (0xBF, 0x0B), (0xBF, 0x0C), (0xBF, 0x0D), (0x94, PacketRouter.NoSubCode) };

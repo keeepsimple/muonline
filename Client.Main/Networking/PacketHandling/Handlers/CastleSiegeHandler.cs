@@ -296,9 +296,14 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             uint value = BinaryPrimitives.ReadUInt32BigEndian(s[6..]);
             Run(() =>
             {
-                if (result == 1) _siege.SetTaxRate(type, (byte)Math.Min(value, byte.MaxValue));
+                if (result == 1)
+                {
+                    _siege.SetTaxRate(type, value);
+                    if (type == 3) Chat($"The Land of Trials entrance fee is now {value:N0} Zen.");
+                }
                 else RequestDialog.ShowInfo(result == 2
                     ? "Only the castle owner's guild master can change the taxes."
+                    : type == 3 ? $"The entrance fee could not be changed (0-{MaxHuntZoneFee:N0} Zen, not during the battle)."
                     : "The tax rate could not be changed (0-3 %, not during the battle).");
             });
             return Task.CompletedTask;

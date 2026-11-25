@@ -726,6 +726,44 @@ namespace Client.Main.Networking.Services
             System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(packet[6..], targetPlayerId);
         }
 
+        public const int GuildRelationshipChangeRequestLength = 7;
+
+        /// <summary>Asks the guild master <paramref name="targetPlayerId"/> (in scope) for an alliance / hostility change (0xE5).</summary>
+        public Task<bool> SendGuildRelationshipChangeRequestAsync(byte relationshipType, byte requestType, ushort targetPlayerId)
+            => SendSimplePacketAsync("guild relationship request", () =>
+            {
+                WriteGuildRelationshipChangeRequest(GetClearedPacketMemory(GuildRelationshipChangeRequestLength).Span,
+                    relationshipType, requestType, targetPlayerId);
+                return GuildRelationshipChangeRequestLength;
+            });
+
+        /// <summary>Written by hand for the same reason as the 0xE6 response: TargetPlayerId is ShortBigEndian on the server.</summary>
+        public static void WriteGuildRelationshipChangeRequest(Span<byte> packet, byte relationshipType, byte requestType, ushort targetPlayerId)
+        {
+            packet[0] = 0xC1;
+            packet[1] = GuildRelationshipChangeRequestLength;
+            packet[2] = 0xE5;
+            packet[3] = relationshipType;
+            packet[4] = requestType;
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(packet[5..], targetPlayerId);
+        }
+
+        /// <summary>Requests the guilds of the own alliance (0xE9); answered with AllianceList.</summary>
+        public Task<bool> SendAllianceListRequestAsync()
+            => SendSimplePacketAsync("alliance list request", () =>
+            {
+                _ = new RequestAllianceList(GetClearedPacketMemory(RequestAllianceList.Length));
+                return RequestAllianceList.Length;
+            });
+
+        /// <summary>Removes a guild from the alliance (alliance master), or leaves it with the own guild name (0xEB 0x01).</summary>
+        public Task<bool> SendRemoveAllianceGuildAsync(string guildName)
+            => SendSimplePacketAsync("remove alliance guild request", () =>
+            {
+                new RemoveAllianceGuildRequest(GetClearedPacketMemory(RemoveAllianceGuildRequest.Length)).GuildName = FitField(guildName, 8);
+                return RemoveAllianceGuildRequest.Length;
+            });
+
         /// <summary>
         /// Requests the item list of another player's personal store.
         /// </summary>
@@ -1563,6 +1601,34 @@ namespace Client.Main.Networking.Services
                 return QuestCompletionRequest.Length;
             });
 
+        /// <summary>ActiveQuestListRequest (F6 1A): OpenMU answers with QuestStateList (F6 1A).</summary>
+        public Task<bool> SendActiveQuestListRequestAsync()
+            => SendSimplePacketAsync("ActiveQuestListRequest (F6 1A)", () =>
+            {
+                _ = new ActiveQuestListRequest(GetClearedPacketMemory(ActiveQuestListRequest.Length));
+                return ActiveQuestListRequest.Length;
+            });
+
+        /// <summary>QuestStateRequest (F6 1B): OpenMU answers with QuestState (F6 1B) if the quest is in progress.</summary>
+        public Task<bool> SendQuestStateRequestAsync(ushort questNumber, ushort questGroup)
+            => SendSimplePacketAsync($"QuestStateRequest (F6 1B) {questGroup}/{questNumber}", () =>
+            {
+                var packet = new QuestStateRequest(GetClearedPacketMemory(QuestStateRequest.Length));
+                packet.QuestNumber = questNumber;
+                packet.QuestGroup = questGroup;
+                return QuestStateRequest.Length;
+            });
+
+        /// <summary>QuestCancelRequest (F6 0F): OpenMU resets the active quest and answers with QuestCancelled (F6 0F).</summary>
+        public Task<bool> SendQuestCancelRequestAsync(ushort questNumber, ushort questGroup)
+            => SendSimplePacketAsync($"QuestCancelRequest (F6 0F) {questGroup}/{questNumber}", () =>
+            {
+                var packet = new QuestCancelRequest(GetClearedPacketMemory(QuestCancelRequest.Length));
+                packet.QuestNumber = questNumber;
+                packet.QuestGroup = questGroup;
+                return QuestCancelRequest.Length;
+            });
+
         /// <summary>
         /// Sends a legacy quest progress request (C1 A2). SourceMain5.2 sends NewState=1 for progression.
         /// </summary>
@@ -2009,6 +2075,69 @@ namespace Client.Main.Networking.Services
                 _logger.LogError(ex, "Error sending Crywolf chaos rate benefit request.");
             }
         }
+
+        // Event NPC dialogs. The Write* methods build the packets into a cleared span of the packet length
+        // and are public for the offline packet checks.
+
+        /// <summary>DoppelgangerEnterRequest (0xBF/0x0E); slot 0xFF lets the server find the ticket.</summary>
+        public static int WriteDoppelgangerEnterRequest(Span<byte> span, byte ticketSlot)
+        {
+            _ = new DoppelgangerEnterRequestRef(span) { TicketItemSlot = ticketSlot };
+            return DoppelgangerEnterRequestRef.Length;
+        }
+
+        /// <summary>IllusionTempleEnterRequest (0xBF/0x00) for temple 1-6; slot 0xFF lets the server find the scroll.</summary>
+        public static int WriteIllusionTempleEnterRequest(Span<byte> span, byte temple, byte ticketSlot)
+        {
+            _ = new IllusionTempleEnterRequestRef(span) { MapNumber = temple, ItemSlot = ticketSlot };
+            return IllusionTempleEnterRequestRef.Length;
+        }
+
+        /// <summary>LuckyCoinCountRequest (0xBF/0x0B).</summary>
+        public static int WriteLuckyCoinCountRequest(Span<byte> span)
+        {
+            _ = new LuckyCoinCountRequestRef(span);
+            return LuckyCoinCountRequestRef.Length;
+        }
+
+        /// <summary>LuckyCoinRegistrationRequest (0xBF/0x0C): registers one coin of the inventory.</summary>
+        public static int WriteLuckyCoinRegistrationRequest(Span<byte> span)
+        {
+            _ = new LuckyCoinRegistrationRequestRef(span);
+            return LuckyCoinRegistrationRequestRef.Length;
+        }
+
+        /// <summary>LuckyCoinExchangeRequest (0xBF/0x0D) for 10, 20 or 30 coins.</summary>
+        public static int WriteLuckyCoinExchangeRequest(Span<byte> span, uint coinCount)
+        {
+            _ = new LuckyCoinExchangeRequestRef(span) { CoinCount = coinCount };
+            return LuckyCoinExchangeRequestRef.Length;
+        }
+
+        /// <summary>EventChipRegistrationRequest (0x95) at the Golden Archer; OpenMU ignores type and item index.</summary>
+        public static int WriteEventChipRegistrationRequest(Span<byte> span)
+        {
+            _ = new EventChipRegistrationRequestRef(span);
+            return EventChipRegistrationRequestRef.Length;
+        }
+
+        public Task<bool> SendDoppelgangerEnterRequestAsync(byte ticketSlot = 0xFF)
+            => SendSimplePacketAsync("doppelganger enter request", () => WriteDoppelgangerEnterRequest(GetClearedPacketMemory(DoppelgangerEnterRequestRef.Length).Span, ticketSlot));
+
+        public Task<bool> SendIllusionTempleEnterRequestAsync(byte temple, byte ticketSlot = 0xFF)
+            => SendSimplePacketAsync("illusion temple enter request", () => WriteIllusionTempleEnterRequest(GetClearedPacketMemory(IllusionTempleEnterRequestRef.Length).Span, temple, ticketSlot));
+
+        public Task<bool> SendLuckyCoinCountRequestAsync()
+            => SendSimplePacketAsync("lucky coin count request", () => WriteLuckyCoinCountRequest(GetClearedPacketMemory(LuckyCoinCountRequestRef.Length).Span));
+
+        public Task<bool> SendLuckyCoinRegistrationRequestAsync()
+            => SendSimplePacketAsync("lucky coin registration request", () => WriteLuckyCoinRegistrationRequest(GetClearedPacketMemory(LuckyCoinRegistrationRequestRef.Length).Span));
+
+        public Task<bool> SendLuckyCoinExchangeRequestAsync(uint coinCount)
+            => SendSimplePacketAsync("lucky coin exchange request", () => WriteLuckyCoinExchangeRequest(GetClearedPacketMemory(LuckyCoinExchangeRequestRef.Length).Span, coinCount));
+
+        public Task<bool> SendEventChipRegistrationRequestAsync()
+            => SendSimplePacketAsync("event chip registration request", () => WriteEventChipRegistrationRequest(GetClearedPacketMemory(EventChipRegistrationRequestRef.Length).Span));
 
         /// <summary>
         /// Sends a request to an NPC to receive a buff.

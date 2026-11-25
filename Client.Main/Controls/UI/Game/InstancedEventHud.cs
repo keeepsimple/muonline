@@ -130,14 +130,6 @@ namespace Client.Main.Controls.UI.Game
         }
 
         /// <summary>BF/03: players waiting in each of the six temples (meant for the entrance dialog, which the client lacks).</summary>
-        public int[] IllusionTempleUserCounts { get; } = new int[6];
-
-        public void SetIllusionTempleUserCounts(ReadOnlySpan<byte> counts)
-        {
-            for (int i = 0; i < IllusionTempleUserCounts.Length && i < counts.Length; i++)
-                IllusionTempleUserCounts[i] = counts[i];
-        }
-
         public void SetIllusionTempleSkillPoints(int skillPoints)
         {
             BeginIllusionTemple();

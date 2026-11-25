@@ -67,6 +67,7 @@ namespace Client.Main.Scenes
         internal GuildInfoWindow GuildInfo { get; private set; }
         internal GuildCreateWindow GuildCreate { get; private set; }
         internal GensWindow GensInfo { get; private set; }
+        internal QuestJournalWindow QuestJournal { get; private set; }
         internal Client.Main.Controls.UI.Game.CashShop.CashShopWindow CashShopWindow { get; private set; }
         internal FriendListWindow FriendList { get; private set; }
         internal LetterReadWindow LetterRead { get; private set; }
@@ -280,6 +281,10 @@ namespace Client.Main.Scenes
             Controls.Add(BloodCastleTimeControl.Instance);
             Controls.Add(EventZoneHudControl.Instance);
             Controls.Add(KanturuGatewayWindow.Instance);
+            Controls.Add(DoppelgangerEnterControl.Instance);
+            Controls.Add(CursedTempleEnterControl.Instance);
+            Controls.Add(DelgadoLuckyCoinWindow.Instance);
+            Controls.Add(GoldenArcherWindow.Instance);
             Controls.Add(BloodCastleResultControl.Instance);
             Controls.Add(Client.Main.Controls.UI.Game.CastleSiege.CastleSiegeHud.Instance);
             Controls.Add(Client.Main.Controls.UI.Game.CastleSiege.CastleSiegeWindow.Instance);
@@ -348,6 +353,8 @@ namespace Client.Main.Scenes
             Controls.Add(GuildCreate);
             GensInfo = new GensWindow(MuGame.Network.GetGensManager());
             Controls.Add(GensInfo);
+            QuestJournal = new QuestJournalWindow(MuGame.Network.GetQuestLog());
+            Controls.Add(QuestJournal);
             CashShopWindow = new Client.Main.Controls.UI.Game.CashShop.CashShopWindow(MuGame.Network.GetCashShopManager());
             Controls.Add(CashShopWindow);
             var friendManager = MuGame.Network.GetFriendManager();
@@ -458,6 +465,7 @@ namespace Client.Main.Scenes
 
             var duelHud = new DuelHudControl(characterState);
             Controls.Add(duelHud);
+            Controls.Add(new GuildWarHudControl(_guildManager));
             Controls.Add(DevilSquareCountdownControl.Instance);
 
             await MuGame.YieldToNextFrameAsync(

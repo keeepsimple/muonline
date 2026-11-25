@@ -2,6 +2,7 @@
 // are routed through the real PacketRouter (so code/sub-code registration is covered) and the quest state is checked.
 using System.Buffers;
 using System.Buffers.Binary;
+using System.IO.Pipelines;
 using System.Reflection;
 using Client.Main;
 using Client.Main.Configuration;
@@ -10,7 +11,9 @@ using Client.Main.Core.Client;
 using Client.Main.Networking;
 using Client.Main.Networking.PacketHandling;
 using Client.Main.Networking.PacketHandling.Handlers;
+using Client.Main.Controls.UI.Game.Quest;
 using Microsoft.Extensions.Logging.Abstractions;
+using MUnique.OpenMU.Network;
 using MUnique.OpenMU.Network.Packets.ServerToClient;
 
 var logs = NullLoggerFactory.Instance;
@@ -20,7 +23,7 @@ var network = new NetworkManager(logs, settings, state, new ScopeManager(logs, s
 var router = (PacketRouter)typeof(NetworkManager).GetField("_packetRouter", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(network)!;
 var dispatcher = (MainThreadDispatcher)typeof(MuGame).GetField("_mainThreadDispatcher", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
 var handler = (QuestHandler)typeof(PacketRouter).GetField("_questHandler", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(router)!;
-var log = handler.Quests;
+var log = network.GetQuestLog();
 router.SetRoutingMode(false);
 
 int failures = 0;
@@ -29,6 +32,8 @@ void Check(bool ok, string name, string detail = "")
     if (!ok) failures++;
     Console.WriteLine($"[{(ok ? "PASS" : "FAIL")}] {name}{(detail.Length > 0 ? " - " + detail : "")}");
 }
+
+Check(ReferenceEquals(log, handler.Quests), "NetworkManager.GetQuestLog exposes the handler's log");
 
 async Task Route(byte[] packet)
 {
@@ -173,8 +178,61 @@ await Route(C1(0x0C, 20));
 await Route(C1(0x1B, 20));
 Check(log.ActiveQuests.ContainsKey(19) && log.ActiveQuests.ContainsKey(20), "Short F6/0C and F6/1B packets are ignored");
 
+// F6 1A QuestStateList (count @4, ids @5): drops groups not listed, keeps known quests, adds placeholders.
+var stateList = C1(0x1A, 13);
+stateList[4] = 2; U16(stateList, 5, 9); U16(stateList, 7, 20); U16(stateList, 9, 3); U16(stateList, 11, 22);
+await Route(stateList);
+Check(!log.ActiveQuests.ContainsKey(19) && log.ActiveQuests[20].Conditions.Count == 2
+      && log.ActiveQuests.TryGetValue(22, out var placeholder) && placeholder.Id == new QuestLog.QuestId(22, 3) && placeholder.Conditions.Count == 0,
+    "F6/1A quest state list syncs the active groups", string.Join(", ", log.ActiveQuests.Values.Select(v => v.Id)));
+
+// Journal view model: what the window displays.
+await Route(Basic(0x1B, 22, 3, new[] { (ConditionType.MonsterKills, 7, 5u, 5u) }, new[] { (RewardType.Money, 0, 5000u), (RewardType.Experience, 0, 1000u) }));
+var rows = QuestJournalWindow.BuildRows(log);
+Check(rows.Select(r => (r.Title, r.Status, r.Ready)).SequenceEqual(new[] { ("Quest 20/9", "Step 9", false), ("Quest 22/3", "Ready", true) }),
+    "Journal rows: ordered by group with step / ready state", string.Join("; ", rows));
+var lines = QuestJournalWindow.ConditionLines(log.ActiveQuests[20]);
+Check(lines.Count == 2 && lines[0].Text.StartsWith("Kill ") && lines[0].Value == "2/5" && !lines[0].Met && lines[1].Value == "3/3" && lines[1].Met,
+    "Journal condition lines show current/required", string.Join("; ", lines));
+var rewardLines = QuestJournalWindow.RewardLines(log.ActiveQuests[22]);
+Check(rewardLines.SequenceEqual(new[] { $"{5000:N0} Zen", $"{1000:N0} Exp" }), "Journal reward lines", string.Join("; ", rewardLines));
+Check(QuestJournalWindow.ResolveSelection(log, 22)?.Id.Group == 22 && QuestJournalWindow.ResolveSelection(log, 99)?.Id.Group == 20,
+    "Journal selection falls back to the first active quest");
+
+// Requests sent by the journal (captured from a pipe-backed connection): F6 1A list, F6 1B state, F6 0F cancel.
+var toServer = new Pipe();
+var connection = new Connection(new DuplexPipe(new Pipe().Reader, toServer.Writer), null, null, NullLogger<Connection>.Instance);
+var connectionManager = typeof(NetworkManager).GetField("_connectionManager", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(network)!;
+connectionManager.GetType().GetField("_connection", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(connectionManager, connection);
+var service = network.GetCharacterService();
+async Task<string> Sent(Func<Task<bool>> send)
+{
+    if (!await send()) return "not sent";
+    var read = await toServer.Reader.ReadAsync();
+    var bytes = read.Buffer.ToArray();
+    toServer.Reader.AdvanceTo(read.Buffer.End);
+    return Convert.ToHexString(bytes);
+}
+var hex = await Sent(() => service.SendActiveQuestListRequestAsync());
+Check(hex == "C104F61A", "ActiveQuestListRequest bytes", hex);
+hex = await Sent(() => service.SendQuestStateRequestAsync(9, 20));
+Check(hex == "C108F61B09001400", "QuestStateRequest bytes", hex);
+hex = await Sent(() => service.SendQuestCancelRequestAsync(3, 22));
+Check(hex == "C108F60F03001600", "QuestCancelRequest bytes", hex);
+await Route(NumberGroup(0x0F, 8, 22, 0));
+Check(!log.ActiveQuests.ContainsKey(22) && QuestJournalWindow.BuildRows(log).Count == 1, "Cancelled quest leaves the journal");
+
 var unhandled = router.GetUnhandledPacketCounts();
 Check(unhandled.Count == 0, "All packets were routed to a handler", string.Join(", ", unhandled.Select(u => $"{u.Key.Code:X2}-{u.Key.SubCode:X2}")));
 
+// Disconnect / character switch: the session reset clears the log.
+log.AvailableQuests.Add(new(1, 1)); log.LastStepByGroup[1] = 1; log.SelectedQuest = new(1, 1);
+await router.OnDisconnected();
+dispatcher.ProcessPending();
+Check(log.ActiveQuests.Count == 0 && log.AvailableQuests.Count == 0 && log.LastStepByGroup.Count == 0 && log.EventQuests.Count == 0 && log.SelectedQuest == null,
+    "Session reset clears the quest log");
+
 Console.WriteLine(failures == 0 ? "Quest packet checks passed." : $"Quest packet checks: {failures} failure(s).");
 return failures == 0 ? 0 : 1;
+
+sealed record DuplexPipe(PipeReader Input, PipeWriter Output) : IDuplexPipe;

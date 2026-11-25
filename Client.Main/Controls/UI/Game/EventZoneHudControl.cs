@@ -11,8 +11,9 @@ using Microsoft.Xna.Framework;
 namespace Client.Main.Controls.UI.Game
 {
     /// <summary>
-    /// Top-right HUD of the Kanturu (Maya / Nightmare battle) and Crywolf (altars, statue shield, Balgass, result) events,
-    /// driven by <see cref="KanturuEventState"/> and <see cref="CrywolfEventState"/>. Same placement as the Blood Castle HUD.
+    /// Top-right HUD of the Kanturu (Maya / Nightmare battle), Crywolf (altars, statue shield, Balgass, result) and Raklion
+    /// (event and Selupan state, battle result) events, driven by <see cref="KanturuEventState"/>, <see cref="CrywolfEventState"/>
+    /// and <see cref="RaklionEventState"/>. Same placement as the Blood Castle HUD.
     /// </summary>
     public sealed class EventZoneHudControl : UIControl
     {
@@ -52,13 +53,28 @@ namespace Client.Main.Controls.UI.Game
             BuildLines(map);
         }
 
-        private void BuildLines(ushort map)
+        /// <summary>The lines drawn for the given map (public for the offline checks).</summary>
+        public IReadOnlyList<(string Text, Color Color)> Lines => _lines;
+
+        public void BuildLines(ushort map)
         {
             _lines.Clear();
             if (map == KanturuEventState.MapId)
                 BuildKanturu();
             else if (map == CrywolfEventState.MapId && CrywolfEventState.Active)
                 BuildCrywolf();
+            else if (map is RaklionEventState.MapId or RaklionEventState.HatcheryMapId)
+                BuildRaklion();
+        }
+
+        private void BuildRaklion()
+        {
+            _lines.Add(("RAKLION", ModernHudTheme.TextGold));
+            _lines.Add((RaklionEventState.Describe(RaklionEventState.State), ModernHudTheme.TextWhite));
+            string selupan = RaklionEventState.DescribeSelupan(RaklionEventState.SelupanState);
+            if (selupan.Length > 0) _lines.Add((selupan, ModernHudTheme.Warning));
+            if (RaklionEventState.LastBattleSuccess is bool success)
+                _lines.Add((success ? "Selupan defeated" : "Battle failed", success ? ModernHudTheme.Success : ModernHudTheme.Danger));
         }
 
         private void BuildKanturu()

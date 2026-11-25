@@ -267,6 +267,42 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             return Task.CompletedTask;
         }
 
+        [PacketHandler(0xF6, 0x1A)] // QuestStateList: after entering the game and on ActiveQuestListRequest
+        public Task HandleQuestStateListAsync(Memory<byte> packet)
+        {
+            try
+            {
+                if (packet.Length < QuestStateList.GetRequiredSize(0))
+                {
+                    _logger.LogWarning("QuestStateList too short: {Length}", packet.Length);
+                    return Task.CompletedTask;
+                }
+
+                QuestStateList list = packet;
+                int count = Math.Min(list.QuestCount, (packet.Length - QuestStateList.GetRequiredSize(0)) / QuestIdentification.Length);
+                var quests = Enumerable.Range(0, count).Select(i => new QuestLog.QuestId(list[i].Group, list[i].Number)).ToList();
+
+                MuGame.ScheduleOnMainThread(() =>
+                {
+                    // The list carries ids only; conditions and rewards come with QuestState (F6 1B) per quest.
+                    foreach (var group in Quests.ActiveQuests.Keys.Where(g => quests.All(q => q.Group != g)).ToList())
+                        Quests.ActiveQuests.Remove(group);
+                    foreach (var id in quests)
+                    {
+                        if (!Quests.ActiveQuests.TryGetValue(id.Group, out var known) || known.Id != id)
+                            Quests.ActiveQuests[id.Group] = new QuestLog.Quest(id, [], []);
+                        _ = _characterService.SendQuestStateRequestAsync(id.Number, id.Group);
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error parsing QuestStateList packet.");
+            }
+
+            return Task.CompletedTask;
+        }
+
         [PacketHandler(0xF6, 0x1B)] // QuestState (C1) and QuestStateExtended (C2)
         public Task HandleQuestStateAsync(Memory<byte> packet)
         {
@@ -375,41 +411,11 @@ namespace Client.Main.Networking.PacketHandling.Handlers
 
         private static string Describe(QuestLog.Quest quest)
         {
-            var parts = quest.Conditions.Select(c => c.Type switch
-            {
-                ConditionType.MonsterKills => $"kill {NpcDatabase.GetNpcName(c.RequirementId)} {c.CurrentCount}/{c.RequiredCount}",
-                ConditionType.Item => $"bring {ItemName(c.RequirementId)} {c.CurrentCount}/{c.RequiredCount}",
-                _ => $"{c.Type} {c.CurrentCount}/{c.RequiredCount}",
-            }).ToList();
+            var parts = quest.Conditions.Select(c => $"{QuestLog.ConditionText(c)} {c.CurrentCount}/{c.RequiredCount}").ToList();
             string text = $"Quest {quest.Id.Group}/{quest.Id.Number}: " + (parts.Count > 0 ? string.Join(", ", parts) : "no conditions");
             if (quest.Rewards.Count > 0)
-            {
-                text += ". Reward: " + string.Join(", ", quest.Rewards.Select(r => r.Type switch
-                {
-                    RewardType.Experience => $"{r.Count:N0} Exp",
-                    RewardType.Money => $"{r.Count:N0} Zen",
-                    RewardType.Item => ItemName(r.RewardId),
-                    RewardType.GensContribution => $"{r.Count} gens contribution",
-                    _ => $"{r.Type} {r.Count}",
-                }));
-            }
-
+                text += ". Reward: " + string.Join(", ", quest.Rewards.Select(QuestLog.RewardText));
             return text;
-        }
-
-        /// <summary>OpenMU item type: group &lt;&lt; 9 | number.</summary>
-        private static string ItemName(ushort itemType)
-        {
-            byte group = (byte)(itemType >> 9);
-            short number = (short)(itemType & 0x1FF);
-            try
-            {
-                return ItemDatabase.GetItemName(group, number) ?? $"item {group}/{number}";
-            }
-            catch (Exception)
-            {
-                return $"item {group}/{number}";
-            }
         }
 
         private static void ShowSystemMessage(string text)

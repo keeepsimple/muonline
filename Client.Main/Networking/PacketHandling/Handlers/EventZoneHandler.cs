@@ -22,7 +22,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
     /// Kanturu (0xD1) and Crywolf (0xBD) event packets: the Kanturu entry dialog and battle HUD data, the Crywolf
     /// statue/altar/Balgass HUD data and result. KanturuStateInfo, KanturuStateChange and CrywolfInfo are registered in
     /// <see cref="MiscGamePacketHandler"/> (music) and forward to the static <c>Apply*</c> methods here.
-    /// The server sends no Raklion HUD data, only the Raklion state packets (0xD1/0x10-0x13) next to localized chat/golden messages.
+    /// The Raklion state packets (0xD1/0x10-0x13) drive the Raklion lines of the event-zone HUD.
     /// Also the event item NPCs: Lucky Coins at Delgado (0xBF/0x0B-0x0D) and the Golden Archer registration (0x94).
     /// </summary>
     public class EventZoneHandler : IGamePacketHandler
@@ -275,7 +275,6 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 RaklionEventState.SetState(state, selupan);
                 RaklionEventState.SetState(RaklionEventState.DetailStateMarker, selupan);
             });
-            ShowSystemMessage("Raklion: " + RaklionEventState.Describe(state));
             return Task.CompletedTask;
         }
 
@@ -286,8 +285,6 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             byte state = packet.Span[4];
             byte detail = packet.Span[5];
             MuGame.ScheduleOnMainThread(() => RaklionEventState.SetState(state, detail));
-            if (state != RaklionEventState.DetailStateMarker)
-                ShowSystemMessage("Raklion: " + RaklionEventState.Describe(state));
             return Task.CompletedTask;
         }
 
@@ -320,7 +317,6 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             if (packet.Length < 8) return Task.CompletedTask;
             uint count = BinaryPrimitives.ReadUInt32LittleEndian(packet.Span[4..]);
             MuGame.ScheduleOnMainThread(() => EventItemState.LuckyCoinsRegistered = count);
-            ShowSystemMessage($"Registered Lucky Coins: {count}.");
             return Task.CompletedTask;
         }
 
@@ -348,8 +344,12 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             if (packet.Length < 12) return Task.CompletedTask;
             byte result = packet.Span[4];
             uint count = BinaryPrimitives.ReadUInt32LittleEndian(packet.Span[8..]);
-            MuGame.ScheduleOnMainThread(() => EventItemState.LuckyCoinsRegistered = count);
-            ShowSystemMessage(DescribeLuckyCoinRegistration(result, count));
+            string text = DescribeLuckyCoinRegistration(result, count);
+            MuGame.ScheduleOnMainThread(() =>
+            {
+                EventItemState.LuckyCoinsRegistered = count;
+                DelgadoLuckyCoinWindow.Instance.StatusText = text;
+            });
             return Task.CompletedTask;
         }
 
@@ -357,7 +357,8 @@ namespace Client.Main.Networking.PacketHandling.Handlers
         public Task HandleLuckyCoinExchangeAsync(Memory<byte> packet)
         {
             if (packet.Length < 5) return Task.CompletedTask;
-            ShowSystemMessage(DescribeLuckyCoinExchange(packet.Span[4]));
+            string text = DescribeLuckyCoinExchange(packet.Span[4]);
+            MuGame.ScheduleOnMainThread(() => DelgadoLuckyCoinWindow.Instance.StatusText = text);
             return Task.CompletedTask;
         }
 
@@ -377,10 +378,8 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             {
                 EventItemState.EventChipsRegistered = registered;
                 EventItemState.EventChipsInInventory = inInventory;
+                GoldenArcherWindow.Instance.ShowResult(result);
             });
-            ShowSystemMessage(result == 1
-                ? "You have no item to register."
-                : $"Registered: {registered}, in your inventory: {inInventory}.");
             return Task.CompletedTask;
         }
     }

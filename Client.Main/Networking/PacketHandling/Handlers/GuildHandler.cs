@@ -416,11 +416,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 }
 
                 var score = new GuildWarScoreUpdate(packet);
-                byte own = score.ScoreOfOwnGuild, enemy = score.ScoreOfEnemyGuild;
-                bool changed = own != Guilds.WarOwnScore || enemy != Guilds.WarEnemyScore;
-                Guilds.UpdateWarScore(own, enemy);
-                if (changed) // the initial 0:0 already came with the declaration message
-                    ShowSystemMessage($"Guild war score: {Guilds.OwnGuild?.Name ?? "Your guild"} {own} : {enemy} {Guilds.WarEnemyGuild}");
+                Guilds.UpdateWarScore(score.ScoreOfOwnGuild, score.ScoreOfEnemyGuild); // shown by GuildWarHudControl
             }
             catch (Exception ex)
             {
@@ -446,10 +442,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 }
 
                 int seconds = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(packet.Span[6..]);
-                Guilds.SoccerRemainingSeconds = seconds;
-                // ponytail: chat line per full minute / last 10 seconds; a scoreboard HUD can read GuildManager.Soccer*.
-                if (seconds > 0 && (seconds % 60 == 0 || seconds <= 10))
-                    ShowSystemMessage(seconds >= 60 ? $"Battle soccer: {seconds / 60} minute(s) left." : $"Battle soccer: {seconds} second(s) left.");
+                Guilds.SoccerRemainingSeconds = seconds; // shown by GuildWarHudControl
             }
             catch (Exception ex)
             {
@@ -472,9 +465,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 }
 
                 var score = new GuildSoccerScoreUpdate(packet);
-                Guilds.UpdateSoccerScore(score.RedTeamName, score.RedTeamGoals, score.BlueTeamName, score.BlueTeamGoals);
-                if (Guilds.SoccerScoreVisible)
-                    ShowSystemMessage($"Battle soccer: {Guilds.SoccerRedTeam} {Guilds.SoccerRedGoals} : {Guilds.SoccerBlueGoals} {Guilds.SoccerBlueTeam}");
+                Guilds.UpdateSoccerScore(score.RedTeamName, score.RedTeamGoals, score.BlueTeamName, score.BlueTeamGoals); // shown by GuildWarHudControl
             }
             catch (Exception ex)
             {
@@ -585,6 +576,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 {
                     _ = _characterService.SendGuildInfoRequestAsync(Guilds.OwnGuildId);
                     _ = _characterService.SendGuildListRequestAsync();
+                    _ = _characterService.SendAllianceListRequestAsync();
                 }
             }
             catch (Exception ex)
@@ -616,11 +608,7 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                     guilds.Add(new AllianceGuildInfo(ReadName(entry[33..41]), entry[0], GuildInfo.UnpackMark(entry[1..33])));
                 }
 
-                Guilds.UpdateAllianceList(guilds);
-                // ponytail: no alliance window yet (GuildInfoWindow alliance tab is a placeholder); list goes to chat.
-                ShowSystemMessage(guilds.Count == 0
-                    ? "Your guild is not part of an alliance."
-                    : "Alliance: " + string.Join(", ", guilds.ConvertAll(g => $"{g.Name} ({g.MemberCount})")));
+                Guilds.UpdateAllianceList(guilds); // shown on the GuildInfoWindow union tab
             }
             catch (Exception ex)
             {
@@ -645,7 +633,10 @@ namespace Client.Main.Networking.PacketHandling.Handlers
                 bool success = packet.Span[4] != 0;
                 ShowSystemMessage(success ? "The guild has been removed from the alliance." : "The guild could not be removed from the alliance.");
                 if (success && Guilds.HasGuild)
+                {
                     _ = _characterService.SendGuildInfoRequestAsync(Guilds.OwnGuildId);
+                    _ = _characterService.SendAllianceListRequestAsync();
+                }
             }
             catch (Exception ex)
             {

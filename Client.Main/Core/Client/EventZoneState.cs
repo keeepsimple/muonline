@@ -193,6 +193,8 @@ namespace Client.Main.Core.Client
     public static class RaklionEventState
     {
         public const byte DetailStateMarker = 11;
+        public const ushort MapId = 57;
+        public const ushort HatcheryMapId = 58;
 
         public static byte State { get; private set; }
         /// <summary>0 none, 1 standby, 2-8 pattern 1-7, 9 dead.</summary>
@@ -209,20 +211,30 @@ namespace Client.Main.Core.Client
 
         public static void SetBattleResult(bool success) => LastBattleSuccess = success;
 
+        /// <summary>Short text of the event state, for the HUD and the chat.</summary>
         public static string Describe(byte state) => state switch
         {
-            0 => "The spider eggs are alive and the hatchery gate is open.",
-            1 => "Only a few spider eggs are left.",
-            2 => "All spider eggs are destroyed. Selupan is about to appear.",
-            3 => "Selupan appeared. The hatchery gate closes soon.",
-            4 => "Selupan rises.",
-            5 => "The battle against Selupan is running; the hatchery can still be entered.",
-            6 => "The hatchery gate is about to close.",
-            7 => "The hatchery gate is closed.",
-            8 => "All players of the battle have fallen.",
-            9 => "The battle ended. The hatchery gate opens soon.",
-            10 => "The event ended. The spider eggs appear again.",
-            _ => $"Unknown Raklion state {state}.",
+            0 => "The spider eggs are alive",
+            1 => "Only a few spider eggs are left",
+            2 => "Selupan is about to appear",
+            3 => "Selupan appeared",
+            4 => "Selupan rises",
+            5 => "Battle against Selupan",
+            6 => "The hatchery closes soon",
+            7 => "The hatchery is closed",
+            8 => "All players have fallen",
+            9 => "The hatchery opens soon",
+            10 => "The spider eggs appear again",
+            _ => $"Unknown state {state}",
+        };
+
+        /// <summary>Selupan line of the HUD; empty while Selupan is not there.</summary>
+        public static string DescribeSelupan(byte selupanState) => selupanState switch
+        {
+            1 => "Selupan: standby",
+            >= 2 and <= 8 => $"Selupan: pattern {selupanState - 1}",
+            9 => "Selupan: dead",
+            _ => string.Empty,
         };
     }
 

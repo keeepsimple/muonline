@@ -1,83 +1,52 @@
 #nullable enable
-using Client.Main.Controllers;
-using Client.Main.Controls.UI.Game.Common;
-using Client.Main.Models;
-using Microsoft.Xna.Framework;
-using Microsoft.Xna.Framework.Graphics;
+using System.Collections.Generic;
 
 namespace Client.Main.Controls.UI.Game
 {
     /// <summary>
-    /// Cursed Temple (Illusion Temple) event enter dialog.
+    /// Illusion Temple entry dialog of Mirage (NpcWindowResponse IllusionTemple). One button per temple sends
+    /// IllusionTempleEnterRequest (0xBF/0x00) with slot 0xFF, so the server picks the Scroll of Blood of that level.
+    /// The players per temple come from IllusionTempleUserCount (0xBF/0x03) when the server sends it.
     /// </summary>
-    public class CursedTempleEnterControl : UIControl
+    public sealed class CursedTempleEnterControl : NpcDialogWindowBase
     {
-        private SpriteFont? _font;
+        public const int TempleCount = 6;
 
-        public event Action? EnterRequested;
-        public event Action? CloseRequested;
+        private static CursedTempleEnterControl? _instance;
+        private int[]? _userCounts;
 
-        public CursedTempleEnterControl()
+        private CursedTempleEnterControl() : base(70, 4)
         {
-            AutoViewSize = false;
-            Interactive = true;
-            BackgroundColor = new Color(18, 16, 28, 245);
-            BorderColor = ModernHudTheme.BorderOuter;
-            BorderThickness = 2;
-            ControlSize = new Point(340, 260);
-            ViewSize = ControlSize;
-            Visible = false;
-        }
-
-        public override void Draw(GameTime gameTime)
-        {
-            if (!Visible || Status != GameControlStatus.Ready) return;
-            var sb = GraphicsManager.Instance.Sprite;
-            var pixel = GraphicsManager.Instance.Pixel;
-            _font ??= GraphicsManager.Instance.Font;
-            if (sb == null || pixel == null || _font == null) return;
-
-            Rectangle rect = DisplayRectangle;
-            sb.Draw(pixel, rect, BackgroundColor * Alpha);
-            sb.Draw(pixel, new Rectangle(rect.X, rect.Y, rect.Width, 2), new Color(140, 80, 200) * Alpha);
-
-            int y = rect.Y + 20;
-            var title = "Illusion Temple (Cursed Temple)";
-            var tsz = _font.MeasureString(title) * 0.7f;
-            sb.DrawString(_font, title, new Vector2(rect.Center.X - tsz.X / 2, y), ModernHudTheme.TextGold * Alpha, 0f, Vector2.Zero, 0.7f, SpriteEffects.None, 0f);
-            y += 42;
-
-            string[] lines =
-            [
-                "Level: 220+",
-                "Tickets: 1 Old Scroll",
-                "Reward: Illusion Points, Rank Rewards",
-                "",
-                "6 vs 6 team battle for the holy artifact!",
-                "",
-                "[Press ESC to close]"
-            ];
-            foreach (var line in lines)
+            for (int i = 0; i < TempleCount; i++)
             {
-                var sz = _font.MeasureString(line) * 0.5f;
-                Color c = line.StartsWith("[") ? ModernHudTheme.TextGray :
-                          line.StartsWith("6 vs") ? new Color(255, 200, 60) :
-                          ModernHudTheme.TextWhite;
-                sb.DrawString(_font, line, new Vector2(rect.X + 24, y), c * Alpha, 0f, Vector2.Zero, 0.5f, SpriteEffects.None, 0f);
-                y += 24;
+                byte temple = (byte)(i + 1);
+                AddButton(i / 2, i % 2, 2, () => TempleButtonText(temple, _userCounts), () => true,
+                    () => _ = MuGame.Network?.GetCharacterService()?.SendIllusionTempleEnterRequestAsync(temple));
             }
+
+            AddCloseButton(3, 1, 2);
         }
 
-        public override void Update(GameTime gameTime)
+        public static CursedTempleEnterControl Instance => _instance ??= new CursedTempleEnterControl();
+
+        protected override string Title => "ILLUSION TEMPLE";
+        protected override string? Subtitle => "Mirage";
+
+        public override IReadOnlyList<string> BodyLines =>
+        [
+            "Choose the temple of your Scroll of Blood.",
+            "Two teams fight for the holy relic.",
+        ];
+
+        public static string TempleButtonText(int temple, int[]? userCounts)
+            => userCounts == null ? $"TEMPLE {temple}" : $"TEMPLE {temple} ({userCounts[temple - 1]})";
+
+        public string ButtonText(int temple) => TempleButtonText(temple, _userCounts);
+
+        public void SetUserCounts(byte[] counts)
         {
-            base.Update(gameTime);
-            if (!Visible) return;
-            var kb = MuGame.Instance.Keyboard;
-            var prev = MuGame.Instance.PrevKeyboard;
-            if (kb.IsKeyDown(Microsoft.Xna.Framework.Input.Keys.Enter) && prev.IsKeyUp(Microsoft.Xna.Framework.Input.Keys.Enter))
-                EnterRequested?.Invoke();
-            if (kb.IsKeyDown(Microsoft.Xna.Framework.Input.Keys.Escape) && prev.IsKeyUp(Microsoft.Xna.Framework.Input.Keys.Escape))
-                CloseRequested?.Invoke();
+            _userCounts = new int[TempleCount];
+            for (int i = 0; i < TempleCount && i < counts.Length; i++) _userCounts[i] = counts[i];
         }
     }
 }

@@ -114,8 +114,10 @@ namespace Client.Main.Networking.PacketHandling.Handlers
         public Task HandleIllusionTempleEnterResultAsync(Memory<byte> packet)
         {
             if (packet.Length < 5) return Task.CompletedTask;
-            string text = DescribeIllusionTempleEnter(packet.Span[4]);
-            if (text != null) MuGame.ScheduleOnMainThread(() => RequestDialog.ShowInfo(text));
+            byte result = packet.Span[4];
+            string text = DescribeIllusionTempleEnter(result);
+            if (result == 0) MuGame.ScheduleOnMainThread(() => CursedTempleEnterControl.Instance.Hide());
+            else if (text != null) MuGame.ScheduleOnMainThread(() => RequestDialog.ShowInfo(text));
             return Task.CompletedTask;
         }
 
@@ -134,14 +136,12 @@ namespace Client.Main.Networking.PacketHandling.Handlers
             return Task.CompletedTask;
         }
 
-        [PacketHandler(0xBF, 0x03)] // IllusionTempleUserCount (S2C): players per temple, for the entrance dialog
+        [PacketHandler(0xBF, 0x03)] // IllusionTempleUserCount (S2C): players per temple, for the entrance dialog (OpenMU does not send it yet)
         public Task HandleIllusionTempleUserCountAsync(Memory<byte> packet)
         {
             if (packet.Length < 10) return Task.CompletedTask;
             byte[] counts = packet.Span.Slice(4, 6).ToArray();
-            MuGame.ScheduleOnMainThread(() => InstancedEventHud.Instance.SetIllusionTempleUserCounts(counts));
-            // ponytail: no Illusion Temple entrance dialog yet, so the counts go to the chat.
-            EventZoneHandler.ShowSystemMessage("Illusion Temple players: " + string.Join(", ", Array.ConvertAll(counts, c => c.ToString())) + ".");
+            MuGame.ScheduleOnMainThread(() => CursedTempleEnterControl.Instance.SetUserCounts(counts));
             return Task.CompletedTask;
         }
 
@@ -190,8 +190,13 @@ namespace Client.Main.Networking.PacketHandling.Handlers
         public Task HandleDoppelgangerEnterResultAsync(Memory<byte> packet)
         {
             if (packet.Length < 5) return Task.CompletedTask;
-            string text = DescribeDoppelgangerEnter(packet.Span[4]);
-            if (text != null) MuGame.ScheduleOnMainThread(() => RequestDialog.ShowInfo(text));
+            byte result = packet.Span[4];
+            string text = DescribeDoppelgangerEnter(result);
+            MuGame.ScheduleOnMainThread(() =>
+            {
+                DoppelgangerEnterControl.Instance.ApplyEnterResult(result);
+                if (text != null) RequestDialog.ShowInfo(text);
+            });
             return Task.CompletedTask;
         }
 

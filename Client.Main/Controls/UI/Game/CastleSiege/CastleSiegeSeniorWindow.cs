@@ -9,16 +9,19 @@ using Client.Main.Core.Client;
 using Client.Main.Models;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
+using MUnique.OpenMU.Network.Packets.ServerToClient;
+using static Client.Main.Core.Client.CastleSiegeManager;
 
 namespace Client.Main.Controls.UI.Game.CastleSiege
 {
     /// <summary>
     /// Castle management window of the Senior NPC (NpcWindow 12, castle owner's guild master): Chaos Machine and
-    /// store tax rates, treasury withdrawal, and the gate / Guardian Statue list with repair.
+    /// store tax rates, treasury withdrawal, the gate / Guardian Statue list with repair, buy and upgrade, and the
+    /// Land of Trials public access and entrance fee.
     /// </summary>
     public sealed class CastleSiegeSeniorWindow : MessengerWindowBase
     {
-        private enum Tab { Taxes, Gates, Statues }
+        private enum Tab { Taxes, Gates, Statues, Trials }
 
         private const int Width = 380;
         private const int TabY = HeaderHeight + 8;
@@ -34,24 +37,30 @@ namespace Client.Main.Controls.UI.Game.CastleSiege
         // OpenMU CastleSiegeTaxProvider.MaximumPercentageTax.
         private const int MaxTaxRate = 3;
 
-        private static readonly string[] TabNames = { "TAXES", "GATES", "STATUES" };
+        private static readonly string[] TabNames = { "TAXES", "GATES", "STATUES", "TRIALS" };
+
+        // GuildPosition.AssistantMaster (G_SUB_MASTER); not in the OpenMU 0.9.8 packet enum.
+        private const GuildMemberRole AssistantMaster = (GuildMemberRole)64;
+
+        private static readonly UpgradeType[] UpgradeButtons = { UpgradeType.Defense, UpgradeType.Regeneration, UpgradeType.Life };
 
         private static CastleSiegeSeniorWindow? _instance;
         public static CastleSiegeSeniorWindow Instance => _instance ??= new CastleSiegeSeniorWindow();
         public override bool NonDisposable => true;
 
-        private readonly TextFieldControl _withdrawField;
+        /// <summary>Zen to withdraw (taxes tab) or the entrance fee (Land of Trials tab).</summary>
+        private readonly TextFieldControl _amountField;
         private Tab _tab = Tab.Taxes;
         private int _selected = -1;
         private int _hoveredTab = -1;
         private int _hoveredRow = -1;
         private int _hoveredTaxButton = -1;
-        private bool _actionHovered;
+        private int _hoveredAction = -1;
 
         private CastleSiegeSeniorWindow() : base(Width, Height)
         {
             Align = ControlAlign.HorizontalCenter | ControlAlign.VerticalCenter;
-            _withdrawField = AddField(Pad + 10, BodyY + 110, 180, 10);
+            _amountField = AddField(Pad + 10, BodyY + 110, 180, 10);
         }
 
         private static CastleSiegeManager? Siege => MuGame.Network?.GetCastleSiegeManager();
@@ -63,7 +72,7 @@ namespace Client.Main.Controls.UI.Game.CastleSiege
         {
             _tab = Tab.Taxes;
             _selected = -1;
-            _withdrawField.Value = string.Empty;
+            _amountField.Value = string.Empty;
             base.Show();
             RequestData();
         }
@@ -85,7 +94,7 @@ namespace Client.Main.Controls.UI.Game.CastleSiege
                 _ = service.SendOwnerLogoRequestAsync();
                 _ = service.SendTaxInfoRequestAsync();
             }
-            else
+            else if (IsDefenseTab)
             {
                 _ = service.SendDefenseListRequestAsync(_tab == Tab.Statues);
             }
@@ -93,7 +102,7 @@ namespace Client.Main.Controls.UI.Game.CastleSiege
 
         private static Rectangle TabLocal(int index)
         {
-            int width = (BodyWidth - 8) / 3;
+            int width = (BodyWidth - 12) / 4;
             return new Rectangle(Pad + index * (width + 4), TabY, width, TabHeight);
         }
 
@@ -103,7 +112,33 @@ namespace Client.Main.Controls.UI.Game.CastleSiege
         private static Rectangle TaxButtonLocal(int index)
             => new(Pad + BodyWidth - 80 + (index % 2) * 36, BodyY + 12 + (index / 2) * 32, 30, 24);
 
+        /// <summary>Land of Trials OPEN / CLOSE buttons.</summary>
+        private static Rectangle TrialsButtonLocal(int index) => new(Pad + BodyWidth - 146 + index * 72, BodyY + 10, 66, 24);
+
         private static readonly Rectangle ActionLocal = new(Pad, ButtonY, BodyWidth, 32);
+
+        /// <summary>Defense tabs: 0 buy/repair, 1-3 the upgrade types.</summary>
+        private static Rectangle DefenseActionLocal(int index)
+        {
+            int width = (BodyWidth - 12) / 4;
+            return new Rectangle(Pad + index * (width + 4), ButtonY, width, 32);
+        }
+
+        private bool IsDefenseTab => _tab is Tab.Gates or Tab.Statues;
+
+        private CastleSiegeManager.DefenseNpc? SelectedNpc
+            => Siege is { } siege && _selected >= 0 && _selected < siege.DefenseNpcs.Count ? siege.DefenseNpcs[_selected] : null;
+
+        /// <summary>The player's guild/role for the server's owner checks; the guild name falls back to the owner master's name.</summary>
+        private static bool CanManage(bool masterOnly)
+        {
+            var network = MuGame.Network;
+            if (network == null || Siege is not { } siege) return false;
+            var guilds = network.GetGuildManager();
+            string? ownGuild = guilds.OwnGuild?.Name
+                ?? (guilds.HasGuild && network.GetCharacterState().Name == siege.OwnerGuildMaster ? siege.OwnerGuild : null);
+            return IsOwnerOfficer(ownGuild, guilds.OwnRole, siege.OwnerGuild, masterOnly);
+        }
 
         // ─────────────────────────────── Update ───────────────────────────────
 
@@ -115,7 +150,7 @@ namespace Client.Main.Controls.UI.Game.CastleSiege
                 return;
             }
 
-            _withdrawField.Visible = _tab == Tab.Taxes;
+            _amountField.Visible = _tab is Tab.Taxes or Tab.Trials;
             base.Update(gameTime);
         }
 
@@ -127,19 +162,27 @@ namespace Client.Main.Controls.UI.Game.CastleSiege
 
             _hoveredTaxButton = -1;
             _hoveredRow = -1;
+            _hoveredAction = -1;
             if (_tab == Tab.Taxes)
             {
                 for (int i = 0; i < 4; i++)
                     if (Translate(TaxButtonLocal(i)).Contains(MousePosition)) _hoveredTaxButton = i;
+            }
+            else if (_tab == Tab.Trials)
+            {
+                for (int i = 0; i < 2; i++)
+                    if (Translate(TrialsButtonLocal(i)).Contains(MousePosition)) _hoveredTaxButton = i;
             }
             else
             {
                 int count = Siege?.DefenseNpcs.Count ?? 0;
                 for (int i = 0; i < VisibleRows && i < count; i++)
                     if (Translate(RowLocal(i)).Contains(MousePosition)) _hoveredRow = i;
+                for (int i = 0; i < 4; i++)
+                    if (Translate(DefenseActionLocal(i)).Contains(MousePosition)) _hoveredAction = i;
             }
 
-            _actionHovered = Translate(ActionLocal).Contains(MousePosition);
+            if (!IsDefenseTab && Translate(ActionLocal).Contains(MousePosition)) _hoveredAction = 0;
         }
 
         protected override bool HandleClick()
@@ -154,9 +197,16 @@ namespace Client.Main.Controls.UI.Game.CastleSiege
                 {
                     _tab = (Tab)_hoveredTab;
                     _selected = -1;
+                    _amountField.Value = string.Empty;
                     siege.SetDefenseNpcs(Array.Empty<CastleSiegeManager.DefenseNpc>());
                     RequestData();
                 }
+                return true;
+            }
+
+            if (_hoveredTaxButton >= 0 && _tab == Tab.Trials)
+            {
+                if (CanManage(masterOnly: true)) _ = service.SendHuntZoneEntranceSettingAsync(_hoveredTaxButton == 0);
                 return true;
             }
 
@@ -175,21 +225,45 @@ namespace Client.Main.Controls.UI.Game.CastleSiege
                 return true;
             }
 
-            if (!_actionHovered) return false;
-            if (_tab == Tab.Taxes)
+            if (_hoveredAction < 0) return false;
+            if (_tab == Tab.Trials)
             {
-                if (PlayerShopUi.TryParseZen(_withdrawField.Value, out uint amount) && amount > 0)
+                if (!CanManage(masterOnly: true)) return true;
+                if (PlayerShopUi.TryParseZen(_amountField.Value, out uint fee) && fee <= MaxHuntZoneFee)
+                {
+                    _ = service.SendTaxChangeAsync(3, fee);
+                    _amountField.Value = string.Empty;
+                }
+                else RequestDialog.ShowInfo($"Enter an entrance fee of 0 to {MaxHuntZoneFee:N0} Zen.");
+            }
+            else if (_tab == Tab.Taxes)
+            {
+                if (PlayerShopUi.TryParseZen(_amountField.Value, out uint amount) && amount > 0)
                 {
                     _ = service.SendTributeWithdrawAsync(amount);
-                    _withdrawField.Value = string.Empty;
+                    _amountField.Value = string.Empty;
                 }
                 else RequestDialog.ShowInfo("Enter the amount of Zen to withdraw.");
             }
-            else if (_selected >= 0 && _selected < siege.DefenseNpcs.Count)
+            else if (SelectedNpc is { } npc)
             {
-                var npc = siege.DefenseNpcs[_selected];
-                RequestDialog.Show($"Repair {NpcName(npc)} #{npc.Index}?",
-                    onAccept: () => _ = service.SendDefenseRepairAsync(npc.Number, npc.Index));
+                if (_hoveredAction == 0 && npc.IsAlive)
+                {
+                    RequestDialog.Show($"Repair {NpcName(npc)} #{npc.Index}?",
+                        onAccept: () => _ = service.SendDefenseRepairAsync(npc.Number, npc.Index));
+                }
+                else if (_hoveredAction == 0)
+                {
+                    if (CanManage(masterOnly: false))
+                        RequestDialog.Show(BuyPrompt(npc), onAccept: () => _ = service.SendDefenseBuyAsync(npc.Number, npc.Index));
+                }
+                else
+                {
+                    var type = UpgradeButtons[_hoveredAction - 1];
+                    if (CanManage(masterOnly: false) && GetNextUpgrade(npc, type) is { } upgrade && UpgradePrompt(npc, type) is { } prompt)
+                        RequestDialog.Show(prompt,
+                            onAccept: () => _ = service.SendDefenseUpgradeAsync(npc.Number, npc.Index, (uint)type, upgrade.Level));
+                }
             }
             return true;
         }
@@ -214,14 +288,46 @@ namespace Client.Main.Controls.UI.Game.CastleSiege
             if (_tab == Tab.Taxes)
             {
                 DrawTaxes(sb, body, siege);
-                PlayerShopUi.DrawButton(sb, Translate(ActionLocal), "WITHDRAW", _actionHovered, true, ModernHudTheme.Accent, Alpha, 13f);
+                PlayerShopUi.DrawButton(sb, Translate(ActionLocal), "WITHDRAW", _hoveredAction == 0, true, ModernHudTheme.Accent, Alpha, 13f);
+            }
+            else if (_tab == Tab.Trials)
+            {
+                bool canManage = CanManage(masterOnly: true);
+                DrawTrials(sb, body, siege, canManage);
+                PlayerShopUi.DrawButton(sb, Translate(ActionLocal), "SET ENTRANCE FEE", _hoveredAction == 0 && canManage, canManage, ModernHudTheme.Accent, Alpha, 13f);
             }
             else
             {
                 DrawDefenses(sb, body, siege);
-                bool canRepair = _selected >= 0 && _selected < siege.DefenseNpcs.Count;
-                PlayerShopUi.DrawButton(sb, Translate(ActionLocal), "REPAIR", _actionHovered && canRepair, canRepair, ModernHudTheme.Accent, Alpha, 13f);
+                var npc = SelectedNpc;
+                bool canManage = npc != null && CanManage(masterOnly: false);
+                bool primaryEnabled = npc is { IsAlive: true } || (npc != null && canManage);
+                PlayerShopUi.DrawButton(sb, Translate(DefenseActionLocal(0)), npc is { } n ? PrimaryActionLabel(n) : "REPAIR",
+                    _hoveredAction == 0 && primaryEnabled, primaryEnabled, ModernHudTheme.Accent, Alpha, 13f);
+                for (int i = 0; i < UpgradeButtons.Length; i++)
+                {
+                    var type = UpgradeButtons[i];
+                    bool enabled = canManage && GetNextUpgrade(npc!.Value, type) != null;
+                    string label = npc is { } selected ? UpgradeLabel(selected, type) : UpgradeLabel(type);
+                    PlayerShopUi.DrawButton(sb, Translate(DefenseActionLocal(i + 1)), label, _hoveredAction == i + 1 && enabled, enabled,
+                        ModernHudTheme.Accent, Alpha, 12f);
+                }
             }
+        }
+
+        private void DrawTrials(SpriteBatch sb, Rectangle body, CastleSiegeManager siege, bool canManage)
+        {
+            PlayerShopUi.DrawText(sb, "Public entry", new Vector2(body.X + 10, body.Y + 15), ModernHudTheme.TextGray, 12f, Alpha);
+            PlayerShopUi.DrawText(sb, HuntZoneAccessText(siege), new Vector2(body.X + 110, body.Y + 15), ModernHudTheme.TextWhite, 12f, Alpha);
+            for (int i = 0; i < 2; i++)
+                PlayerShopUi.DrawButton(sb, Translate(TrialsButtonLocal(i)), i == 0 ? "OPEN" : "CLOSE", _hoveredTaxButton == i && canManage, canManage,
+                    ModernHudTheme.Accent, Alpha, 12f);
+            PlayerShopUi.DrawText(sb, "Entrance fee", new Vector2(body.X + 10, body.Y + 47), ModernHudTheme.TextGray, 12f, Alpha);
+            PlayerShopUi.DrawText(sb, HuntZoneFeeText(siege), new Vector2(body.X + 110, body.Y + 47), ModernHudTheme.TextGold, 12f, Alpha);
+            PlayerShopUi.DrawText(sb, $"Fee 0 - {MaxHuntZoneFee:N0} Zen; the owner's alliance enters free.", new Vector2(body.X + 10, body.Y + 80),
+                ModernHudTheme.TextGray, 11f, Alpha);
+            PlayerShopUi.DrawText(sb, "Only the castle owner's guild master can change these.", new Vector2(body.X + 10, body.Bottom - 44), ModernHudTheme.TextGray, 11f, Alpha);
+            PlayerShopUi.DrawText(sb, "\"-\": unknown until changed here or asked at the guard.", new Vector2(body.X + 10, body.Bottom - 28), ModernHudTheme.TextGray, 11f, Alpha);
         }
 
         private void DrawTaxes(SpriteBatch sb, Rectangle body, CastleSiegeManager siege)
@@ -250,7 +356,8 @@ namespace Client.Main.Controls.UI.Game.CastleSiege
 
         protected override void DrawOverlay(SpriteBatch sb, GameTime gameTime)
         {
-            if (_tab == Tab.Taxes) DrawPlaceholder(sb, _withdrawField, "Zen to withdraw");
+            if (_tab == Tab.Taxes) DrawPlaceholder(sb, _amountField, "Zen to withdraw");
+            else if (_tab == Tab.Trials) DrawPlaceholder(sb, _amountField, "Entrance fee (Zen)");
         }
 
         private void DrawDefenses(SpriteBatch sb, Rectangle body, CastleSiegeManager siege)
@@ -287,6 +394,55 @@ namespace Client.Main.Controls.UI.Game.CastleSiege
             }
         }
 
-        private static string NpcName(CastleSiegeManager.DefenseNpc npc) => npc.Number == 277 ? "Gate" : "Statue";
+        private static string NpcName(CastleSiegeManager.DefenseNpc npc) => npc.Number == GateNumber ? "Gate" : "Statue";
+
+        // ─────────────────────────────── View model (testable) ───────────────────────────────
+
+        /// <summary>
+        /// OpenMU's owner checks: buy/upgrade take the guild master or assistant (CastleSiegeNpcAuthorization), taxes and the
+        /// Land of Trials only the guild master (CastleSiegeTaxProvider.GetPersistentGuildMasterIdAsync) of the owner guild.
+        /// </summary>
+        public static bool IsOwnerOfficer(string? ownGuild, GuildMemberRole role, string ownerGuild, bool masterOnly)
+            => ownerGuild.Length > 0 && ownGuild == ownerGuild
+               && (role == GuildMemberRole.GuildMaster || (!masterOnly && role == AssistantMaster));
+
+        public static string PrimaryActionLabel(CastleSiegeManager.DefenseNpc npc) => npc.IsAlive ? "REPAIR" : "BUY";
+
+        private static string ShortName(UpgradeType type) => type switch
+        {
+            UpgradeType.Defense => "DEF",
+            UpgradeType.Regeneration => "REGEN",
+            _ => "MAX HP",
+        };
+
+        /// <summary>Button caption without a selection.</summary>
+        public static string UpgradeLabel(UpgradeType type) => ShortName(type);
+
+        /// <summary>"DEF Lv2" for the next level, "DEF MAX" when maxed, "REGEN -" when the structure cannot take it.</summary>
+        public static string UpgradeLabel(CastleSiegeManager.DefenseNpc npc, UpgradeType type)
+        {
+            if (GetNextUpgrade(npc, type) is { } next) return $"{ShortName(type)} Lv{next.Level}";
+            return $"{ShortName(type)} {(npc.IsAlive && GetUpgrades(npc.Number, type) != null ? "MAX" : "-")}";
+        }
+
+        public static string BuyPrompt(CastleSiegeManager.DefenseNpc npc)
+            => $"Build {NpcName(npc)} #{npc.Index} for {GetBuyPrice(npc.Number):N0} Zen?";
+
+        public static string? UpgradePrompt(CastleSiegeManager.DefenseNpc npc, UpgradeType type)
+        {
+            if (GetNextUpgrade(npc, type) is not { } next) return null;
+            string effect = type switch
+            {
+                UpgradeType.Defense => $"defense {next.Value}",
+                UpgradeType.Regeneration => $"regeneration {next.Value}",
+                _ => $"max HP {next.Value:N0}",
+            };
+            return $"Upgrade {NpcName(npc)} #{npc.Index} to level {next.Level} ({effect}) for {next.Zen:N0} Zen and {next.Jewels} Jewel(s) of Guardian?";
+        }
+
+        public static string HuntZoneAccessText(CastleSiegeManager siege)
+            => !siege.HuntZonePublicKnown ? "-" : siege.IsHuntZonePublic ? "Open" : "Closed";
+
+        public static string HuntZoneFeeText(CastleSiegeManager siege) => siege.HuntZoneFeeKnown ? $"{siege.HuntZoneFee:N0} Zen" : "-";
     }
 }

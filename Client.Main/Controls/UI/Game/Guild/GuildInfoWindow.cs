@@ -47,6 +47,10 @@ namespace Client.Main.Controls.UI.Game.Guild
         private Tab _tab = Tab.Guild;
         private int _scroll;
         private string? _selectedMember;
+        private string? _selectedAlliance;
+        private ushort? _selectedTarget;
+        private IReadOnlyList<AllianceGuildInfo>? _markSource;
+        private readonly List<GuildInfo> _allianceMarks = new();
         private int _hoveredTab = -1;
         private int _hoveredRow = -1;
         private int _hoveredButton = -1;
@@ -89,9 +93,12 @@ namespace Client.Main.Controls.UI.Game.Guild
         {
             _scroll = 0;
             _selectedMember = null;
+            _selectedAlliance = null;
+            _selectedTarget = null;
             Visible = true;
             BringToFront();
             RequestData();
+            if (_tab == Tab.Union) RequestAllianceList();
         }
 
         public void Hide()
@@ -114,6 +121,11 @@ namespace Client.Main.Controls.UI.Game.Guild
             _ = service.SendGuildListRequestAsync();
             if (_guilds.ShouldRequestGuild(_guilds.OwnGuildId))
                 _ = service.SendGuildInfoRequestAsync(_guilds.OwnGuildId);
+        }
+
+        private void RequestAllianceList()
+        {
+            if (_guilds.HasGuild) _ = MuGame.Network?.GetCharacterService()?.SendAllianceListRequestAsync();
         }
 
         private Rectangle Translate(Rectangle local)
@@ -158,6 +170,16 @@ namespace Client.Main.Controls.UI.Game.Guild
                     buttons.Add(new ButtonSpec("DISMISS", false, ModernHudTheme.Accent, () => { }));
                     buttons.Add(new ButtonSpec("KICK", canKick, ModernHudTheme.Danger, ConfirmKick));
                     break;
+                case Tab.Union when _guilds.IsGuildMaster:
+                    var target = GetSelectedTarget();
+                    bool endHostility = target != null && GetHostilityRequestType(target.Value.GuildName, _guilds.RivalGuildName) == RequestLeave;
+                    string? removable = GetRemovableAllianceGuild(_guilds, _selectedAlliance);
+                    buttons.Add(new ButtonSpec("ALLIANCE", target != null, ModernHudTheme.Accent, () => SendRelationshipRequest(RelationshipAlliance)));
+                    buttons.Add(new ButtonSpec(endHostility ? "END HOSTILITY" : "HOSTILITY", target != null, ModernHudTheme.Danger,
+                        () => SendRelationshipRequest(RelationshipHostility)));
+                    buttons.Add(new ButtonSpec(removable != null && removable == _guilds.OwnGuild?.Name ? "LEAVE" : "REMOVE", removable != null,
+                        ModernHudTheme.Danger, ConfirmRemoveAlliance));
+                    break;
             }
 
             return buttons;
@@ -199,6 +221,77 @@ namespace Client.Main.Controls.UI.Game.Guild
             if (string.IsNullOrEmpty(name)) return;
             var service = MuGame.Network?.GetCharacterService();
             if (service != null) _ = service.SendGuildKickPlayerAsync(name, string.Empty);
+        }
+
+        // ─────────────────────────────── Union (alliance / hostility) ───────────────────────────────
+
+        // Server GuildRelationshipType / GuildRequestType values (0xE5).
+        public const byte RelationshipAlliance = 1;
+        public const byte RelationshipHostility = 2;
+        public const byte RequestJoin = 1;
+        public const byte RequestLeave = 2;
+
+        private const int AllianceRows = 7; // S6 alliance limit
+        private const int TargetHeaderRow = AllianceRows;
+        private const int TargetRows = VisibleRows - AllianceRows - 1;
+
+        public readonly record struct UnionTarget(ushort PlayerId, string PlayerName, string GuildName);
+
+        /// <summary>Guild masters of other guilds in scope (0xE5 needs the target player id); unknown names are skipped.</summary>
+        public static List<UnionTarget> GetUnionTargets(GuildManager guilds, Func<ushort, string?> playerName)
+        {
+            var targets = new List<UnionTarget>();
+            foreach (var (id, guildId) in guilds.GetForeignGuildMastersInScope())
+            {
+                string guild = guilds.GetGuildName(guildId);
+                if (playerName(id) is { Length: > 0 } name && guild.Length > 0)
+                    targets.Add(new UnionTarget(id, name, guild));
+            }
+            return targets;
+        }
+
+        /// <summary>Requesting hostility against the current rival guild ends it instead.</summary>
+        public static byte GetHostilityRequestType(string targetGuild, string rivalGuild)
+            => rivalGuild.Length > 0 && targetGuild == rivalGuild ? RequestLeave : RequestJoin;
+
+        /// <summary>The own guild can always leave; other guilds can only be removed by the alliance master (0xEB 0x01).</summary>
+        public static string? GetRemovableAllianceGuild(GuildManager guilds, string? selected)
+        {
+            if (!guilds.IsGuildMaster || string.IsNullOrEmpty(selected)) return null;
+            bool listed = false;
+            foreach (var guild in guilds.AllianceGuilds) listed |= guild.Name == selected;
+            if (!listed) return null;
+            return selected == guilds.OwnGuild?.Name || guilds.IsAllianceMaster ? selected : null;
+        }
+
+        private List<UnionTarget> GetUnionTargets()
+        {
+            var scope = MuGame.Network?.GetScopeManager();
+            var targets = GetUnionTargets(_guilds, id => scope != null && scope.TryGetScopeObjectName(id, out var name) ? name : null);
+            if (targets.Count > TargetRows) targets.RemoveRange(TargetRows, targets.Count - TargetRows); // ponytail: no scrolling, nearest few are enough
+            return targets;
+        }
+
+        private UnionTarget? GetSelectedTarget()
+        {
+            if (_selectedTarget == null) return null;
+            foreach (var target in GetUnionTargets())
+                if (target.PlayerId == _selectedTarget) return target;
+            return null;
+        }
+
+        private void SendRelationshipRequest(byte relationship)
+        {
+            if (GetSelectedTarget() is not { } target) return;
+            byte request = relationship == RelationshipHostility ? GetHostilityRequestType(target.GuildName, _guilds.RivalGuildName) : RequestJoin;
+            _ = MuGame.Network?.GetCharacterService()?.SendGuildRelationshipChangeRequestAsync(relationship, request, target.PlayerId);
+        }
+
+        private void ConfirmRemoveAlliance()
+        {
+            if (GetRemovableAllianceGuild(_guilds, _selectedAlliance) is not { } guild) return;
+            string text = guild == _guilds.OwnGuild?.Name ? "Do you really want to leave the alliance?" : $"Remove {guild} from the alliance?";
+            RequestDialog.Show(text, onAccept: () => _ = MuGame.Network?.GetCharacterService()?.SendRemoveAllianceGuildAsync(guild));
         }
 
         // ─────────────────────────────── Update ───────────────────────────────
@@ -245,6 +338,15 @@ namespace Client.Main.Controls.UI.Game.Guild
                 for (int i = 0; i < VisibleRows && _scroll + i < members.Count; i++)
                     if (Translate(RowLocal(i)).Contains(position)) _hoveredRow = _scroll + i;
             }
+            else if (_tab == Tab.Union)
+            {
+                for (int i = 0; i < VisibleRows; i++)
+                    if (Translate(RowLocal(i)).Contains(position)) _hoveredRow = i;
+                int allianceCount = Math.Min(AllianceRows, _guilds.AllianceGuilds.Count);
+                int targetCount = _guilds.IsGuildMaster ? GetUnionTargets().Count : 0;
+                if (!(_hoveredRow < allianceCount || (_hoveredRow > TargetHeaderRow && _hoveredRow - TargetHeaderRow - 1 < targetCount)))
+                    _hoveredRow = -1;
+            }
 
             var buttons = GetButtons();
             _hoveredButton = -1;
@@ -263,7 +365,14 @@ namespace Client.Main.Controls.UI.Game.Guild
                     _tab = tab;
                     _scroll = 0;
                     if (tab == Tab.Members) RequestData();
+                    if (tab == Tab.Union) RequestAllianceList();
                 }
+                return;
+            }
+            if (_hoveredRow >= 0 && _tab == Tab.Union)
+            {
+                if (_hoveredRow < AllianceRows) _selectedAlliance = _guilds.AllianceGuilds[_hoveredRow].Name;
+                else _selectedTarget = GetUnionTargets()[_hoveredRow - TargetHeaderRow - 1].PlayerId;
                 return;
             }
             if (_hoveredRow >= 0)
@@ -338,6 +447,17 @@ namespace Client.Main.Controls.UI.Game.Guild
                 using var markScope = new SpriteBatchScope(sb, SpriteSortMode.Deferred, BlendState.NonPremultiplied, SamplerState.PointClamp,
                     DepthStencilState.None, RasterizerState.CullNone, null, UiScaler.SpriteTransform);
                 GuildMarkTextureCache.Draw(sb, GuildMarkTextureCache.Get(guild), MarkRect(Translate(BodyLocal)), Alpha);
+            }
+            else if (_guilds.HasGuild && _tab == Tab.Union)
+            {
+                using var markScope = new SpriteBatchScope(sb, SpriteSortMode.Deferred, BlendState.NonPremultiplied, SamplerState.PointClamp,
+                    DepthStencilState.None, RasterizerState.CullNone, null, UiScaler.SpriteTransform);
+                var marks = GetAllianceMarks();
+                for (int i = 0; i < marks.Count && i < AllianceRows; i++)
+                {
+                    var row = Translate(RowLocal(i));
+                    GuildMarkTextureCache.Draw(sb, GuildMarkTextureCache.Get(marks[i]), new Rectangle(row.X + 6, row.Y + 2, 16, 16), Alpha);
+                }
             }
 
             base.Draw(gameTime);
@@ -441,12 +561,77 @@ namespace Client.Main.Controls.UI.Game.Guild
             }
         }
 
+        /// <summary>
+        /// GuildMarkTextureCache is keyed by guild id; alliance entries have none, so they get synthetic ids per list slot.
+        /// ponytail: ids 0xFFFFFF00+ assumed unused by real guilds.
+        /// </summary>
+        private List<GuildInfo> GetAllianceMarks()
+        {
+            var source = _guilds.AllianceGuilds;
+            if (!ReferenceEquals(source, _markSource))
+            {
+                _markSource = source;
+                _allianceMarks.Clear();
+                for (int i = 0; i < source.Count; i++)
+                    _allianceMarks.Add(new GuildInfo { Id = 0xFFFFFF00u + (uint)i, Name = source[i].Name, Mark = source[i].Mark });
+            }
+            return _allianceMarks;
+        }
+
+        private void DrawListHeader(SpriteBatch sb, Rectangle header, string left, string right)
+        {
+            sb.Draw(GraphicsManager.Instance.Pixel, header, ModernHudTheme.BgMid * Alpha);
+            PlayerShopUi.DrawText(sb, left, new Vector2(header.X + 9, header.Y + 3), ModernHudTheme.TextGold, 11f, Alpha);
+            var size = PlayerShopUi.Measure(right, 11f);
+            PlayerShopUi.DrawText(sb, right, new Vector2(header.Right - 10 - size.X, header.Y + 3), ModernHudTheme.TextGold, 11f, Alpha);
+        }
+
+        private void DrawUnionRowBackground(SpriteBatch sb, Rectangle row, int index, bool selected)
+        {
+            var pixel = GraphicsManager.Instance.Pixel;
+            if (selected) sb.Draw(pixel, row, ModernHudTheme.Accent * 0.35f * Alpha);
+            else if (_hoveredRow == index) sb.Draw(pixel, row, Color.White * 0.06f * Alpha);
+            else if (index % 2 == 1) sb.Draw(pixel, row, Color.White * 0.025f * Alpha);
+        }
+
         private void DrawUnionTab(SpriteBatch sb, Rectangle body, GuildInfo? guild)
         {
-            string alliance = string.IsNullOrEmpty(guild?.AllianceName) ? "Your guild is not part of an alliance." : $"Alliance: {guild!.AllianceName}";
-            PlayerShopUi.DrawTextCentered(sb, alliance, new Rectangle(body.X, body.Y + body.Height / 2 - 20, body.Width, 18), ModernHudTheme.TextWhite, 12f, Alpha);
-            PlayerShopUi.DrawTextCentered(sb, "Alliances are not supported by this server yet.", new Rectangle(body.X, body.Y + body.Height / 2 + 4, body.Width, 16),
-                ModernHudTheme.TextGray, 11f, Alpha);
+            string title = string.IsNullOrEmpty(guild?.AllianceName) ? "Alliance" : $"Alliance: {guild!.AllianceName}";
+            DrawListHeader(sb, new Rectangle(body.X + 1, body.Y + 1, body.Width - 2, ListHeaderHeight - 1), PlayerShopUi.Ellipsize(title, 11f, body.Width - 90), "Members");
+
+            var alliance = _guilds.AllianceGuilds;
+            if (alliance.Count == 0)
+                PlayerShopUi.DrawTextCentered(sb, "Your guild is not part of an alliance.", Translate(RowLocal(1)), ModernHudTheme.TextGray, 12f, Alpha);
+            for (int i = 0; i < alliance.Count && i < AllianceRows; i++)
+            {
+                var entry = alliance[i];
+                var row = Translate(RowLocal(i));
+                DrawUnionRowBackground(sb, row, i, entry.Name == _selectedAlliance);
+                bool master = entry.Name == guild?.AllianceName;
+                PlayerShopUi.DrawText(sb, entry.Name, new Vector2(row.X + 30, row.Y + 3), master ? ModernHudTheme.TextGold : ModernHudTheme.TextWhite, 12f, Alpha);
+                string count = entry.MemberCount.ToString();
+                PlayerShopUi.DrawText(sb, count, new Vector2(row.Right - 10 - PlayerShopUi.Measure(count, 12f).X, row.Y + 3), ModernHudTheme.TextWhite, 12f, Alpha);
+            }
+
+            if (!_guilds.IsGuildMaster) return;
+
+            var headerRow = Translate(RowLocal(TargetHeaderRow));
+            DrawListHeader(sb, headerRow, "Guild masters nearby", "Guild");
+            var targets = GetUnionTargets();
+            if (targets.Count == 0)
+                PlayerShopUi.DrawTextCentered(sb, "Stand near another guild master to send a request.", Translate(RowLocal(TargetHeaderRow + 1)),
+                    ModernHudTheme.TextGray, 11f, Alpha);
+            for (int i = 0; i < targets.Count; i++)
+            {
+                var target = targets[i];
+                int index = TargetHeaderRow + 1 + i;
+                var row = Translate(RowLocal(index));
+                DrawUnionRowBackground(sb, row, index, target.PlayerId == _selectedTarget);
+                PlayerShopUi.DrawText(sb, target.PlayerName, new Vector2(row.X + 9, row.Y + 3), ModernHudTheme.TextWhite, 12f, Alpha);
+                bool rival = target.GuildName == _guilds.RivalGuildName;
+                PlayerShopUi.DrawText(sb, target.GuildName, new Vector2(row.Right - 10 - PlayerShopUi.Measure(target.GuildName, 12f).X, row.Y + 3),
+                    rival ? new Color(255, 30, 0) : ModernHudTheme.TextGold, 12f, Alpha);
+            }
         }
     }
 }

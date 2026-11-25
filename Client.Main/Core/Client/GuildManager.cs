@@ -286,6 +286,20 @@ namespace Client.Main.Core.Client
 
         public void UpdateAllianceList(List<AllianceGuildInfo> guilds) => _allianceGuilds = guilds;
 
+        /// <summary>The alliance carries the name of its master guild (0x66 AllianceGuildName).</summary>
+        public bool IsAllianceMaster => OwnGuild is { } guild && guild.AllianceName.Length > 0 && guild.AllianceName == guild.Name;
+
+        /// <summary>Guild masters of other guilds in scope, i.e. possible targets of a relationship request (0xE5).</summary>
+        public List<(ushort PlayerId, uint GuildId)> GetForeignGuildMastersInScope()
+        {
+            var result = new List<(ushort, uint)>();
+            foreach (var (id, relation) in _players)
+                if (relation.Role == GuildMemberRole.GuildMaster && relation.GuildId != 0 && relation.GuildId != OwnGuildId)
+                    result.Add((id, relation.GuildId));
+            result.Sort((a, b) => a.Item1.CompareTo(b.Item1));
+            return result;
+        }
+
         /// <summary>Drops everything tied to the current session (disconnect / character change).</summary>
         public void Reset()
         {

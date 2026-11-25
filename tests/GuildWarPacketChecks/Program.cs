@@ -7,6 +7,8 @@ using System.Text;
 using Client.Main;
 using Client.Main.Configuration;
 using Client.Main.Controllers;
+using Client.Main.Controls.UI.Game.Guild;
+using Client.Main.Controls.UI.Game.Hud;
 using Client.Main.Core.Client;
 using Client.Main.Networking;
 using Client.Main.Networking.PacketHandling;
@@ -50,6 +52,7 @@ void Str(byte[] data, int offset, string value) => Encoding.UTF8.GetBytes(value)
 var warResult = C1(4, 0x60); warResult[3] = 1;
 await Route(warResult);
 Check(!guilds.IsInWar, "0x60 request result leaves war state untouched");
+Check(GuildWarHudControl.GetView(guilds) == null, "HUD hidden without war");
 
 // 0x61 incoming soccer request: pending until answered.
 var warRequest = C1(12, 0x61); Str(warRequest, 3, "Wolves"); warRequest[11] = 1;
@@ -67,11 +70,14 @@ Check(guilds.IsInWar && guilds.WarEnemyGuild == "Bears" && guilds.WarType == Gui
 var score = C1(6, 0x64); score[3] = 3; score[4] = 2;
 await Route(score);
 Check(guilds.WarOwnScore == 3 && guilds.WarEnemyScore == 2, "0x64 war score", $"{guilds.WarOwnScore}:{guilds.WarEnemyScore}");
+var warView = GuildWarHudControl.GetView(guilds);
+Check(warView == new GuildWarHudControl.View("GUILD WAR", "Your guild", "Bears", 3, 2, ""), "HUD shows war score", warView?.ToString() ?? "null");
 
 // 0x63 ended (won).
 var ended = C1(12, 0x63); ended[3] = 1; Str(ended, 4, "Bears");
 await Route(ended);
 Check(!guilds.IsInWar && guilds.WarOwnScore == 0, "0x63 war ended clears war state");
+Check(GuildWarHudControl.GetView(guilds) == null, "HUD hidden after war end");
 
 // F3/22 soccer time: OpenMU layout, 8 bytes, seconds LE at offset 6.
 var time = C1(8, 0xF3); time[3] = 0x22; BinaryPrimitives.WriteUInt16LittleEndian(time.AsSpan(6), 299);
@@ -83,9 +89,12 @@ var soccer = C1(22, 0xF3); soccer[3] = 0x23; Str(soccer, 4, "Wolves"); soccer[12
 await Route(soccer);
 Check(guilds.SoccerScoreVisible && guilds.SoccerRedTeam == "Wolves" && guilds.SoccerRedGoals == 2 && guilds.SoccerBlueTeam == "Bears" && guilds.SoccerBlueGoals == 1,
     "F3/23 soccer score", $"{guilds.SoccerRedTeam} {guilds.SoccerRedGoals}:{guilds.SoccerBlueGoals} {guilds.SoccerBlueTeam}");
+var soccerView = GuildWarHudControl.GetView(guilds);
+Check(soccerView == new GuildWarHudControl.View("BATTLE SOCCER", "Wolves", "Bears", 2, 1, "4:59"), "HUD shows soccer timer and score", soccerView?.ToString() ?? "null");
 var hide = C1(22, 0xF3); hide[3] = 0x23; hide[12] = 0xFF;
 await Route(hide);
 Check(!guilds.SoccerScoreVisible && guilds.SoccerRedTeam == "" && guilds.SoccerRemainingSeconds == 0, "F3/23 goals 255 hides the scoreboard");
+Check(GuildWarHudControl.GetView(guilds) == null, "HUD hidden after soccer");
 
 // 0xE5 incoming alliance join request from player 0x1234 (id big endian).
 var relRequest = C1(7, 0xE5); relRequest[3] = 1; relRequest[4] = 1; BinaryPrimitives.WriteUInt16BigEndian(relRequest.AsSpan(5), 0x1234);
@@ -112,6 +121,36 @@ await Route(list);
 Check(guilds.AllianceGuilds.Count == 2 && guilds.AllianceGuilds[0].Name == "Wolves" && guilds.AllianceGuilds[0].MemberCount == 12
       && guilds.AllianceGuilds[0].Mark[0] == 1 && guilds.AllianceGuilds[0].Mark[1] == 2 && guilds.AllianceGuilds[1].Name == "Bears",
     "0xE9 alliance list", string.Join(", ", guilds.AllianceGuilds.Select(g => $"{g.Name}({g.MemberCount})")));
+
+// Union tab: own guild 7 "Wolves" is alliance master, guild master 0x0100 of "Bears" (rival) is in scope.
+guilds.StoreGuild(new GuildInfo { Id = 7, Name = "Wolves", AllianceName = "Wolves" });
+guilds.StoreGuild(new GuildInfo { Id = 9, Name = "Bears" });
+guilds.AssignPlayer(0x0100, 9, GuildMemberRole.GuildMaster, isSelf: false);
+guilds.AssignPlayer(0x0101, 9, GuildMemberRole.NormalMember, isSelf: false);
+guilds.AssignPlayer(0x0102, 7, GuildMemberRole.GuildMaster, isSelf: false);
+var targets = GuildInfoWindow.GetUnionTargets(guilds, id => id == 0x0100 ? "BearBoss" : "other");
+Check(targets.Count == 1 && targets[0] == new GuildInfoWindow.UnionTarget(0x0100, "BearBoss", "Bears"), "union targets: foreign guild masters only",
+    string.Join(", ", targets));
+Check(GuildInfoWindow.GetHostilityRequestType("Bears", "Bears") == GuildInfoWindow.RequestLeave
+      && GuildInfoWindow.GetHostilityRequestType("Bears", "") == GuildInfoWindow.RequestJoin, "hostility against the rival ends it");
+Check(guilds.IsAllianceMaster && GuildInfoWindow.GetRemovableAllianceGuild(guilds, "Bears") == "Bears"
+      && GuildInfoWindow.GetRemovableAllianceGuild(guilds, "Nobody") == null, "alliance master can remove listed guilds");
+guilds.StoreGuild(new GuildInfo { Id = 7, Name = "Wolves", AllianceName = "Lions" });
+guilds.UpdateAllianceList(new() { new("Lions", 3, new byte[64]), new("Wolves", 12, new byte[64]) });
+Check(GuildInfoWindow.GetRemovableAllianceGuild(guilds, "Lions") == null && GuildInfoWindow.GetRemovableAllianceGuild(guilds, "Wolves") == "Wolves",
+    "alliance member can only leave");
+
+// Request packets: 0xE5 hand-written big endian id; 0xE9 / 0xEB 01 from the package structs match the server layout.
+var relReq = new byte[CharacterService.GuildRelationshipChangeRequestLength];
+CharacterService.WriteGuildRelationshipChangeRequest(relReq, GuildInfoWindow.RelationshipHostility, GuildInfoWindow.RequestJoin, 0x0100);
+Check(relReq.SequenceEqual(new byte[] { 0xC1, 7, 0xE5, 2, 1, 0x01, 0x00 }), "0xE5 request layout", Convert.ToHexString(relReq));
+var allianceReq = new byte[MUnique.OpenMU.Network.Packets.ClientToServer.RequestAllianceList.Length];
+_ = new MUnique.OpenMU.Network.Packets.ClientToServer.RequestAllianceList(allianceReq);
+Check(allianceReq.SequenceEqual(new byte[] { 0xC1, 3, 0xE9 }), "0xE9 request layout", Convert.ToHexString(allianceReq));
+var removeReq = new byte[MUnique.OpenMU.Network.Packets.ClientToServer.RemoveAllianceGuildRequest.Length];
+new MUnique.OpenMU.Network.Packets.ClientToServer.RemoveAllianceGuildRequest(removeReq).GuildName = "Bears";
+Check(removeReq.SequenceEqual(new byte[] { 0xC1, 12, 0xEB, 0x01, (byte)'B', (byte)'e', (byte)'a', (byte)'r', (byte)'s', 0, 0, 0 }), "0xEB/01 request layout",
+    Convert.ToHexString(removeReq));
 
 // 0xEB/01 remove result.
 var remove = C1(7, 0xEB); remove[3] = 0x01; remove[4] = 1; remove[5] = 2; remove[6] = 1;

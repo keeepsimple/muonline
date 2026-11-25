@@ -107,6 +107,10 @@ namespace Client.Main.Core.Client
         public uint HuntZoneMaxFee { get; private set; }
         public uint HuntZoneFeeStep { get; private set; }
 
+        /// <summary>The Senior has no request for the Land of Trials settings: they are known once the guard info or a change response arrived.</summary>
+        public bool HuntZonePublicKnown { get; private set; }
+        public bool HuntZoneFeeKnown { get; private set; }
+
         // ─────────────────────────────── Updates ───────────────────────────────
 
         public void SetStatus(SiegeState state, DateTime stateStart, DateTime stateEnd, DateTime siegeStart,
@@ -176,11 +180,16 @@ namespace Client.Main.Core.Client
             Treasury = treasury;
         }
 
-        /// <summary>CastleSiegeTaxType 1 = Chaos Machine, 2 = Store.</summary>
-        public void SetTaxRate(byte taxType, byte rate)
+        /// <summary>CastleSiegeTaxType 1 = Chaos Machine, 2 = Store (percent), 3 = Land of Trials entrance fee (Zen).</summary>
+        public void SetTaxRate(byte taxType, uint value)
         {
-            if (taxType == 1) ChaosTaxRate = rate;
-            else if (taxType == 2) StoreTaxRate = rate;
+            if (taxType == 1) ChaosTaxRate = (byte)Math.Min(value, byte.MaxValue);
+            else if (taxType == 2) StoreTaxRate = (byte)Math.Min(value, byte.MaxValue);
+            else if (taxType == 3)
+            {
+                HuntZoneFee = value;
+                HuntZoneFeeKnown = true;
+            }
         }
 
         public void SetTreasury(ulong treasury) => Treasury = treasury;
@@ -219,9 +228,14 @@ namespace Client.Main.Core.Client
             HuntZoneFee = fee;
             HuntZoneMaxFee = maxFee;
             HuntZoneFeeStep = feeStep;
+            HuntZonePublicKnown = HuntZoneFeeKnown = true;
         }
 
-        public void SetHuntZonePublic(bool isPublic) => IsHuntZonePublic = isPublic;
+        public void SetHuntZonePublic(bool isPublic)
+        {
+            IsHuntZonePublic = isPublic;
+            HuntZonePublicKnown = true;
+        }
 
         /// <summary>Forgets everything on logout / character change.</summary>
         public void Reset()
@@ -229,6 +243,7 @@ namespace Client.Main.Core.Client
             HasStatus = false;
             OwnerGuildMark = null;
             HuntZoneAccessType = null;
+            HuntZonePublicKnown = HuntZoneFeeKnown = false;
             IsRegistered = null;
             RegisteredGuilds = Array.Empty<RegisteredGuild>();
             Participants = Array.Empty<Participant>();
@@ -249,6 +264,62 @@ namespace Client.Main.Core.Client
             LastCommand = string.Empty;
             MiniMapPlayers = Array.Empty<(byte, byte)>();
             MiniMapNpcs = Array.Empty<(bool, byte, byte)>();
+        }
+
+        // ─────────────────────────────── Defense rules ───────────────────────────────
+
+        public const uint GateNumber = 277;
+        public const uint StatueNumber = 283;
+
+        /// <summary>CastleSiegeUpgradeType of 0xB2/0x07.</summary>
+        public enum UpgradeType : byte { Defense = 1, Regeneration = 2, Life = 3 }
+
+        /// <summary>One upgrade level: its cost and the resulting value (defense, regeneration or max HP).</summary>
+        public readonly record struct UpgradeLevel(uint Level, int Jewels, int Zen, int Value);
+
+        // ponytail: OpenMU CastleSiegeInitializer defaults; the server can configure other prices, it then refuses/charges by its own table.
+        public const int GateBuyPrice = 9_500_000;
+        public const int StatueBuyPrice = 4_500_000;
+        public const int MaxHuntZoneFee = 300_000; // CastleSiegeTaxProvider.MaximumHuntTax
+
+        private static readonly UpgradeLevel[] GateDefense = { new(0, 0, 0, 100), new(1, 2, 3_000_000, 180), new(2, 3, 3_000_000, 300), new(3, 4, 3_000_000, 520) };
+        private static readonly UpgradeLevel[] GateLife = { new(0, 0, 0, 1_900_000), new(1, 2, 1_000_000, 2_500_000), new(2, 3, 1_000_000, 3_500_000), new(3, 4, 1_000_000, 5_200_000) };
+        private static readonly UpgradeLevel[] StatueDefense = { new(0, 0, 0, 80), new(1, 3, 3_000_000, 180), new(2, 5, 3_000_000, 340), new(3, 7, 3_000_000, 550) };
+        private static readonly UpgradeLevel[] StatueLife = { new(0, 0, 0, 1_500_000), new(1, 3, 1_000_000, 2_200_000), new(2, 5, 1_000_000, 3_400_000), new(3, 7, 1_000_000, 5_000_000) };
+        private static readonly UpgradeLevel[] StatueRegen = { new(0, 0, 0, 0), new(1, 3, 5_000_000, 1), new(2, 5, 5_000_000, 2), new(3, 7, 5_000_000, 3) };
+
+        public static int GetBuyPrice(uint npcNumber) => npcNumber == StatueNumber ? StatueBuyPrice : npcNumber == GateNumber ? GateBuyPrice : 0;
+
+        /// <summary>CastleSiegeConfigurationExtensions.GetUpgrades: gates have no regeneration upgrade.</summary>
+        public static IReadOnlyList<UpgradeLevel>? GetUpgrades(uint npcNumber, UpgradeType type) => (npcNumber, type) switch
+        {
+            (GateNumber, UpgradeType.Defense) => GateDefense,
+            (GateNumber, UpgradeType.Life) => GateLife,
+            (StatueNumber, UpgradeType.Defense) => StatueDefense,
+            (StatueNumber, UpgradeType.Life) => StatueLife,
+            (StatueNumber, UpgradeType.Regeneration) => StatueRegen,
+            _ => null,
+        };
+
+        /// <summary>Current level; the list carries no life level, so it is the level whose max HP the structure has.</summary>
+        public static uint GetLevel(DefenseNpc npc, UpgradeType type)
+        {
+            if (type == UpgradeType.Defense) return npc.DefenseLevel;
+            if (type == UpgradeType.Regeneration) return npc.RegenerationLevel;
+            uint level = 0;
+            foreach (var upgrade in GetUpgrades(npc.Number, UpgradeType.Life) ?? Array.Empty<UpgradeLevel>())
+                if (npc.MaxHp >= upgrade.Value) level = upgrade.Level;
+            return level;
+        }
+
+        /// <summary>The only level the server accepts next (current + 1), or null when unsupported, maxed or destroyed.</summary>
+        public static UpgradeLevel? GetNextUpgrade(DefenseNpc npc, UpgradeType type)
+        {
+            if (!npc.IsAlive || GetUpgrades(npc.Number, type) is not { } upgrades) return null;
+            uint next = GetLevel(npc, type) + 1;
+            foreach (var upgrade in upgrades)
+                if (upgrade.Level == next) return upgrade;
+            return null;
         }
 
         // ─────────────────────────────── Names ───────────────────────────────
